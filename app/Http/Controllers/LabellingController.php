@@ -6,8 +6,46 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+/**
+ * Controller untuk tahap Labelling Sentimen (Tahap 2 Pipeline Machine Learning)
+ * 
+ * ========================================================================
+ * FUNGSI UTAMA: Memberi label sentimen pada data yang sudah di-preprocessing
+ * ========================================================================
+ * 
+ * Kategori Sentimen:
+ * - POSITIF: Opini baik tentang pinjol (pujian, kepuasan, rekomendasi)
+ * - NEGATIF: Opisi buruk tentang pinjol (keluhan, penipuan, bunga tinggi)
+ * - NETRAL: Opisi netral (informasi, fakta, tidak condong)
+ * 
+ * Metode Labelling:
+ * 1. AUTOMATIC: Keyword-based sentiment analysis
+ * 2. MANUAL: Human correction interface
+ * 3. HYBRID: Auto-label + manual correction
+ * 4. LEARNING: Machine learning dari manual corrections
+ * 
+ * INPUT: Data preprocessing hasil PreprocessingController
+ * OUTPUT: Data berlabel siap untuk training SVM
+ * 
+ * @package App\Http\Controllers
+ * @author Developer  
+ * @version 1.0
+ */
 class LabellingController extends Controller
 {
+    /**
+     * Menampilkan halaman utama labelling
+     * 
+     * Fitur yang ditampilkan:
+     * - Upload interface untuk data preprocessing
+     * - Preview data yang akan di-label
+     * - Hasil labelling (auto + manual)
+     * - Pagination untuk dataset besar (100 data/page)
+     * - Learned keywords dari previous corrections
+     * 
+     * @param Request $request HTTP request dengan pagination & session data
+     * @return \Illuminate\View\View View 'labelling' dengan data lengkap
+     */
     public function index(Request $request)
     {
         $uploadedPath = $request->session()->get('label_csv_path');
@@ -55,6 +93,41 @@ class LabellingController extends Controller
         return redirect()->route('labelling.index')->with('status', 'File CSV berhasil diupload.');
     }
 
+    /**
+     * Menjalankan proses auto-labelling sentimen
+     * 
+     * ========================================================================
+     * ALUR PROSES AUTO-LABELLING
+     * ========================================================================
+     * 
+     * 1. VALIDASI INPUT
+     *    - Load data preprocessing dari session
+     *    - Detect kolom teks otomatis
+     *    - Prepare learning dari previous corrections
+     * 
+     * 2. AUTO-LABELLING ALGORITHM
+     *    - Keyword-based sentiment analysis
+     *    - Confidence score calculation
+     *    - Multi-keyword weight calculation
+     *    - Context-aware sentiment detection
+     * 
+     * 3. LEARNING MECHANISM
+     *    - Learn dari manual corrections sebelumnya
+     *    - Update keyword weights
+     *    - Improve future accuracy
+     * 
+     * 4. OUTPUT MANAGEMENT
+     *    - Store ke temporary file (bukan session)
+     *    - Pagination support untuk dataset besar
+     *    - Ready untuk manual correction
+     * 
+     * Algorithm: Keyword matching dengan weighted scoring
+     * Confidence: 0.0 - 1.0 (higher = more confident)
+     * 
+     * @param Request $request HTTP request dengan session data preprocessing
+     * @return \Illuminate\Http\RedirectResponse Redirect dengan status labelling selesai
+     * @throws \Exception Jika file tidak ditemukan atau error processing
+     */
     public function run(Request $request)
     {
         $path = $request->session()->get('label_csv_path');

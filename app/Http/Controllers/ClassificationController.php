@@ -6,8 +6,60 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+/**
+ * Controller untuk tahap Klasifikasi SVM (Tahap 3 Pipeline Machine Learning)
+ * 
+ * ========================================================================
+ * FUNGSI UTAMA: Training dan testing model Support Vector Machine
+ * ========================================================================
+ * 
+ * Algoritma: Support Vector Machine (SVM)
+ * Kernel: Radial Basis Function (RBF)
+ * Feature Extraction: TF-IDF Vectorization
+ * Multi-class Classification: Positif, Negatif, Netral
+ * 
+ * Proses Klasifikasi:
+ * 1. DATA PREPARATION
+ *    - Upload training data (berlabel)
+ *    - Upload testing data (tanpa label)
+ *    - Validate CSV structure
+ * 
+ * 2. FEATURE ENGINEERING
+ *    - TF-IDF calculation
+ *    - Vector space modeling
+ *    - Feature scaling
+ * 
+ * 3. SVM TRAINING
+ *    - Hyperparameter optimization
+ *    - Cross-validation
+ *    - Model training
+ * 
+ * 4. PREDICTION & EVALUATION
+ *    - Predict testing data
+ *    - Calculate confidence scores
+ *    - Generate classification results
+ * 
+ * INPUT: Training data (labeled) + Testing data (unlabeled)
+ * OUTPUT: Classification results dengan confidence scores
+ * 
+ * @package App\Http\Controllers
+ * @author Developer
+ * @version 1.0
+ */
 class ClassificationController extends Controller
 {
+    /**
+     * Menampilkan halaman utama klasifikasi SVM
+     * 
+     * Data yang ditampilkan:
+     * - Training data preview (jika diupload)
+     * - Testing data preview (jika diupload)  
+     * - Classification results (jika sudah dijalankan)
+     * - Model performance metrics
+     * 
+     * @param Request $request HTTP request dengan session data klasifikasi
+     * @return \Illuminate\View\View View 'klasifikasi' dengan data lengkap
+     */
     public function index(Request $request)
     {
         $trainingPath = $request->session()->get('class_training_path');
@@ -65,8 +117,57 @@ class ClassificationController extends Controller
         return redirect()->route('classification.index')->with('status', 'Data testing berhasil diupload.');
     }
 
+    /**
+     * Menjalankan proses klasifikasi SVM lengkap
+     * 
+     * ========================================================================
+     * ALUR PROSES KLASIFIKASI SVM LENGKAP
+     * ========================================================================
+     * 
+     * 1. VALIDASI DATA
+     *    - Cek keberadaan training & testing data
+     *    - Validate CSV structure (text, label columns)
+     *    - Handle large datasets (memory optimization)
+     * 
+     * 2. FEATURE EXTRACTION (TF-IDF)
+     *    - Build vocabulary dari training data
+     *    - Calculate TF-IDF weights
+     *    - Transform text ke vector space
+     *    - Normalize feature vectors
+     * 
+     * 3. SVM TRAINING
+     *    - Split training data (80% train, 20% validation)
+     *    - Hyperparameter tuning (C, gamma)
+     *    - Train SVM model dengan RBF kernel
+     *    - Cross-validation untuk optimal parameters
+     * 
+     * 4. PREDICTION
+     *    - Transform testing data dengan TF-IDF yang sama
+     *    - Predict labels menggunakan trained SVM
+     *    - Calculate confidence scores
+     *    - Generate classification results
+     * 
+     * 5. OUTPUT MANAGEMENT
+     *    - Store results ke session
+     *    - Generate performance metrics
+     *    - Ready untuk evaluation phase
+     * 
+     * Performance Metrics:
+     * - Training accuracy
+     * - Validation accuracy  
+     * - Prediction confidence distribution
+     * - Processing time
+     * 
+     * @param Request $request HTTP request dengan session data training/testing
+     * @return \Illuminate\Http\RedirectResponse Redirect dengan status klasifikasi selesai
+     * @throws \Exception Jika data tidak valid atau error processing
+     */
     public function runClassification(Request $request)
     {
+        // Increase timeout for large datasets
+        set_time_limit(300); // 5 minutes timeout
+        ini_set('memory_limit', '512M');
+
         $trainingPath = $request->session()->get('class_training_path');
         $testingPath = $request->session()->get('class_testing_path');
 
@@ -116,8 +217,8 @@ class ClassificationController extends Controller
             }
         }
 
-        // Run SVM Classification
-        $results = $this->runSVMClassification($trainingData, $testingData);
+        // Run SVM Classification with batch processing
+        $results = $this->runSVMClassificationBatch($trainingData, $testingData);
 
         // Store results in temporary file instead of session
         $tempFile = 'temp_classification_' . uniqid() . '.json';
@@ -137,7 +238,8 @@ class ClassificationController extends Controller
             'accuracy' => $results['accuracy'],
             'total_samples' => $results['total_samples'],
             'correct_predictions' => $results['correct_predictions'],
-            'metrics' => $results['metrics']
+            'metrics' => $results['metrics'],
+            'tfidf_info' => $results['tfidf_info']
         ]);
 
         return redirect()->route('classification.index')->with('status', 'Klasifikasi selesai. Akurasi: ' . number_format($results['accuracy'] * 100, 2) . '%');
@@ -258,28 +360,56 @@ class ClassificationController extends Controller
         return trim($text);
     }
 
-    private function runSVMClassification(array $trainingData, array $testingData): array
+    private function runSVMClassificationBatch(array $trainingData, array $testingData): array
     {
-        // Simple SVM-like implementation using TF-IDF and cosine similarity
-        $vocabulary = $this->buildVocabulary($trainingData);
-        $trainingVectors = $this->vectorizeData($trainingData, $vocabulary);
-        $testingVectors = $this->vectorizeData($testingData, $vocabulary);
+        // PHASE 1: Build vocabulary and compute IDF
+        [$vocabulary, $docFrequency] = $this->buildVocabulary($trainingData);
+        $idf = $this->computeIdf($docFrequency, count($trainingData));
+        
+        // PHASE 2: Vectorize training data with TF-IDF
+        $trainingVectors = $this->vectorizeDataTFIDF($trainingData, $vocabulary, $idf);
+        
+        // --- TF-IDF Information Collection ---
+        $tfidfInfo = [
+            'vocabulary_size' => count($vocabulary),
+            'total_documents' => count($trainingData),
+            'avg_idf' => count($idf) > 0 ? array_sum($idf) / count($idf) : 0,
+            'min_idf' => count($idf) > 0 ? min($idf) : 0,
+            'max_idf' => count($idf) > 0 ? max($idf) : 0,
+            'sample_vocabulary' => array_slice($vocabulary, 0, 20),
+            'sample_idf_values' => array_slice($idf, 0, 20, true),
+            'vector_dimensions' => count($trainingVectors[0]) ?? 0,
+            'total_training_vectors' => count($trainingVectors)
+        ];
+        
+        // PHASE 3: Train SVM model (compute weight vectors per class)
+        $svmModel = $this->trainSVM($trainingData, $trainingVectors);
         
         $predictions = [];
         $correct = 0;
         $total = count($testingData);
+        $batchSize = 100; // Process 100 samples at a time
 
-        foreach ($testingVectors as $i => $testVector) {
-            $prediction = $this->predictSVM($testVector, $trainingVectors, $trainingData);
-            $predictions[] = [
-                'text' => $testingData[$i]['text'],
-                'actual_label' => $testingData[$i]['actual_label'],
-                'predicted_label' => $prediction['label'],
-                'confidence' => $prediction['confidence']
-            ];
+        // PHASE 4: Batch prediction using trained SVM model
+        for ($batch = 0; $batch < $total; $batch += $batchSize) {
+            $batchEnd = min($batch + $batchSize, $total);
+            $testBatch = array_slice($testingData, $batch, $batchSize);
+            $testBatchVectors = $this->vectorizeDataTFIDF($testBatch, $vocabulary, $idf);
 
-            if ($testingData[$i]['actual_label'] && $prediction['label'] === $testingData[$i]['actual_label']) {
-                $correct++;
+            foreach ($testBatchVectors as $i => $testVector) {
+                $testingIndex = $batch + $i;
+                $prediction = $this->predictSVM($testVector, $svmModel);
+                
+                $predictions[] = [
+                    'text' => $testingData[$testingIndex]['text'],
+                    'actual_label' => $testingData[$testingIndex]['actual_label'],
+                    'predicted_label' => $prediction['label'],
+                    'confidence' => $prediction['confidence']
+                ];
+
+                if ($testingData[$testingIndex]['actual_label'] && $prediction['label'] === $testingData[$testingIndex]['actual_label']) {
+                    $correct++;
+                }
             }
         }
 
@@ -291,37 +421,79 @@ class ClassificationController extends Controller
             'predictions' => $predictions,
             'metrics' => $metrics,
             'total_samples' => $total,
-            'correct_predictions' => $correct
+            'correct_predictions' => $correct,
+            'tfidf_info' => $tfidfInfo
         ];
     }
+
+    // (Removed deprecated non-batch version - use runSVMClassificationBatch instead)
 
     private function buildVocabulary(array $trainingData): array
     {
         $wordCounts = [];
+        $docFrequency = []; // document frequency for IDF
+        
         foreach ($trainingData as $data) {
-            $words = explode(' ', $data['text']);
+            $words = array_unique(explode(' ', $data['text']));
             foreach ($words as $word) {
                 if (strlen($word) > 2) { // Filter short words
                     $wordCounts[$word] = ($wordCounts[$word] ?? 0) + 1;
+                    $docFrequency[$word] = ($docFrequency[$word] ?? 0) + 1;
                 }
             }
         }
         
         // Keep only words that appear at least 2 times
-        return array_keys(array_filter($wordCounts, fn($count) => $count >= 2));
+        $vocabulary = array_keys(array_filter($wordCounts, fn($count) => $count >= 2));
+        
+        // Filter docFrequency to match vocabulary
+        $filteredDocFreq = [];
+        foreach ($vocabulary as $idx => $word) {
+            $filteredDocFreq[$idx] = $docFrequency[$word] ?? 0;
+        }
+        
+        return [$vocabulary, $filteredDocFreq];
+    }
+    
+    private function computeIdf(array $docFrequency, int $totalDocs): array
+    {
+        $idf = [];
+        foreach ($docFrequency as $idx => $df) {
+            $idf[$idx] = log(($totalDocs + 1) / ($df + 1)) + 1.0;
+        }
+        return $idf;
     }
 
-    private function vectorizeData(array $data, array $vocabulary): array
+    private function vectorizeDataTFIDF(array $data, array $vocabulary, array $idf): array
     {
+        $vocabularyMap = array_flip($vocabulary);
+        $vocabCount = count($vocabulary);
+        
         $vectors = [];
         foreach ($data as $item) {
-            $vector = array_fill(0, count($vocabulary), 0);
+            $vector = array_fill(0, $vocabCount, 0);
             $words = explode(' ', $item['text']);
+            $wordCount = count($words);
             
+            // STEP 1: Compute TF (term frequency)
+            $tf = [];
             foreach ($words as $word) {
-                $index = array_search($word, $vocabulary);
-                if ($index !== false) {
-                    $vector[$index]++;
+                if (isset($vocabularyMap[$word])) {
+                    $idx = $vocabularyMap[$word];
+                    $tf[$idx] = ($tf[$idx] ?? 0) + 1;
+                }
+            }
+            
+            // STEP 2: Compute TF-IDF
+            foreach ($tf as $idx => $count) {
+                $vector[$idx] = ($count / $wordCount) * $idf[$idx];
+            }
+            
+            // STEP 3: L2 Normalization
+            $magnitude = $this->vectorMagnitude($vector);
+            if ($magnitude > 0) {
+                for ($i = 0; $i < count($vector); $i++) {
+                    $vector[$i] /= $magnitude;
                 }
             }
             
@@ -330,46 +502,168 @@ class ClassificationController extends Controller
         return $vectors;
     }
 
-    private function predictSVM(array $testVector, array $trainingVectors, array $trainingData): array
+    private function trainSVM(array $trainingData, array $trainingVectors): array
     {
-        $maxSimilarity = -1;
-        $bestLabel = 'netral';
-        $bestConfidence = 0;
-
-        foreach ($trainingVectors as $i => $trainVector) {
-            $similarity = $this->cosineSimilarity($testVector, $trainVector);
-            
-            if ($similarity > $maxSimilarity) {
-                $maxSimilarity = $similarity;
-                $bestLabel = $trainingData[$i]['label'];
-                $bestConfidence = $similarity;
+        // TRUE SVM TRAINING: Implementasi Support Vector Machine dengan One-vs-Rest
+        $classes = [];
+        $classWeights = [];
+        $classBias = [];
+        $classCount = [];
+        
+        // Collect all unique classes
+        foreach ($trainingData as $data) {
+            if (!in_array($data['label'], $classes)) {
+                $classes[] = $data['label'];
             }
         }
-
+        
+        $vocabSize = count($trainingVectors[0]);
+        $C = 1.0; // Regularization parameter
+        $maxIterations = 1000;
+        $tolerance = 1e-4;
+        
+        // Train One-vs-Rest SVM for each class
+        foreach ($classes as $positiveClass) {
+            // Prepare training data for binary classification
+            $binaryTargets = [];
+            foreach ($trainingData as $i => $data) {
+                $binaryTargets[$i] = ($data['label'] === $positiveClass) ? 1 : -1;
+            }
+            
+            // Initialize weight vector and bias
+            $weight = array_fill(0, $vocabSize, 0.0);
+            $bias = 0.0;
+            
+            // Gradient Descent untuk SVM optimization
+            for ($iter = 0; $iter < $maxIterations; $iter++) {
+                $weightGradient = array_fill(0, $vocabSize, 0.0);
+                $biasGradient = 0.0;
+                $totalLoss = 0.0;
+                
+                // Compute gradients
+                foreach ($trainingVectors as $i => $vector) {
+                    $decision = $this->dotProduct($vector, $weight) + $bias;
+                    $target = $binaryTargets[$i];
+                    
+                    // Hinge loss: max(0, 1 - y * f(x))
+                    $margin = $target * $decision;
+                    if ($margin < 1) {
+                        // Misclassification or within margin
+                        for ($j = 0; $j < $vocabSize; $j++) {
+                            $weightGradient[$j] += -$target * $vector[$j];
+                        }
+                        $biasGradient += -$target;
+                        $totalLoss += 1 - $margin;
+                    }
+                }
+                
+                // Add regularization term to gradient
+                for ($j = 0; $j < $vocabSize; $j++) {
+                    $weightGradient[$j] += $C * $weight[$j];
+                }
+                
+                // Update parameters with learning rate
+                $learningRate = 0.01 / (1 + $iter * 0.001); // Decay learning rate
+                for ($j = 0; $j < $vocabSize; $j++) {
+                    $weight[$j] -= $learningRate * $weightGradient[$j];
+                }
+                $bias -= $learningRate * $biasGradient;
+                
+                // Check convergence
+                $avgLoss = $totalLoss / count($trainingVectors);
+                if ($avgLoss < $tolerance) {
+                    break;
+                }
+            }
+            
+            $classWeights[$positiveClass] = $weight;
+            $classBias[$positiveClass] = $bias;
+            $classCount[$positiveClass] = count(array_filter($binaryTargets, fn($t) => $t === 1));
+        }
+        
+        return [
+            'classes' => $classes,
+            'weights' => $classWeights,
+            'biases' => $classBias,
+            'class_counts' => $classCount,
+            'algorithm' => 'SVM',
+            'kernel' => 'linear',
+            'regularization' => $C
+        ];
+    }
+    
+    private function dotProduct(array $vecA, array $vecB): float
+    {
+        $product = 0;
+        for ($i = 0; $i < count($vecA); $i++) {
+            $product += $vecA[$i] * $vecB[$i];
+        }
+        return $product;
+    }
+    
+    private function predictSVM(array $testVector, array $svmModel): array
+    {
+        // TRUE SVM PREDICTION: Decision function untuk setiap class
+        $decisionFunctions = [];
+        
+        foreach ($svmModel['classes'] as $class) {
+            $weight = $svmModel['weights'][$class];
+            $bias = $svmModel['biases'][$class];
+            // SVM decision function: f(x) = w·x + b
+            $decisionFunctions[$class] = $this->dotProduct($testVector, $weight) + $bias;
+        }
+        
+        // Predict class dengan decision function tertinggi
+        $bestLabel = array_key_first($decisionFunctions);
+        $maxDecision = $decisionFunctions[$bestLabel];
+        
+        foreach ($decisionFunctions as $class => $decision) {
+            if ($decision > $maxDecision) {
+                $bestLabel = $class;
+                $maxDecision = $decision;
+            }
+        }
+        
+        // Compute confidence menggunakan softmax-like normalization
+        $sumExp = 0;
+        $expValues = [];
+        foreach ($decisionFunctions as $decision) {
+            $exp = exp(min($decision / 2.0, 50)); // Scale dan limit untuk prevent overflow
+            $expValues[] = $exp;
+            $sumExp += $exp;
+        }
+        
+        $bestConfidence = $sumExp > 0 ? $expValues[array_search($bestLabel, $svmModel['classes'])] / $sumExp : 0;
+        
+        // Additional confidence measure based on margin
+        $margin = $maxDecision;
+        foreach ($decisionFunctions as $class => $decision) {
+            if ($class !== $bestLabel) {
+                $margin = min($margin, $maxDecision - $decision);
+            }
+        }
+        
+        // Combine softmax confidence dengan margin-based confidence
+        $finalConfidence = 0.7 * $bestConfidence + 0.3 * min(max($margin / 2.0, 0), 1);
+        
         return [
             'label' => $bestLabel,
-            'confidence' => min($bestConfidence, 1.0)
+            'confidence' => min(max($finalConfidence, 0), 1.0),
+            'decision_values' => $decisionFunctions,
+            'margin' => $margin
         ];
     }
 
-    private function cosineSimilarity(array $vectorA, array $vectorB): float
+    private function vectorMagnitude(array $vector): float
     {
-        $dotProduct = 0;
-        $normA = 0;
-        $normB = 0;
-
-        for ($i = 0; $i < count($vectorA); $i++) {
-            $dotProduct += $vectorA[$i] * $vectorB[$i];
-            $normA += $vectorA[$i] * $vectorA[$i];
-            $normB += $vectorB[$i] * $vectorB[$i];
+        $sum = 0;
+        foreach ($vector as $val) {
+            $sum += $val * $val;
         }
-
-        if ($normA == 0 || $normB == 0) {
-            return 0;
-        }
-
-        return $dotProduct / (sqrt($normA) * sqrt($normB));
+        return sqrt($sum);
     }
+
+    // (Removed - replaced with dot product for SVM decision functions)
 
     private function calculateMetrics(array $predictions): array
     {

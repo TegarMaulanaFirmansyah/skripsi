@@ -6,8 +6,64 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+/**
+ * Controller untuk tahap Evaluasi Model (Tahap 4 Pipeline Machine Learning)
+ * 
+ * ========================================================================
+ * FUNGSI UTAMA: Mengukur performa dan membandingkan model klasifikasi
+ * ========================================================================
+ * 
+ * Metrik Evaluasi:
+ * - Accuracy: (TP + TN) / Total
+ * - Precision: TP / (TP + FP)  
+ * - Recall: TP / (TP + FN)
+ * - F1-Score: 2 × (Precision × Recall) / (Precision + Recall)
+ * 
+ * Fitur Evaluasi:
+ * 1. SINGLE MODEL EVALUATION
+ *    - Upload classification results
+ *    - Calculate performance metrics
+ *    - Generate confusion matrix
+ *    - Per-class analysis
+ * 
+ * 2. MULTI-MODEL COMPARISON
+ *    - Bandingkan multiple algorithms
+ *    - Ranking berdasarkan accuracy
+ *    - Statistical comparison
+ *    - Best method identification
+ * 
+ * 3. CONFUSION MATRIX ANALYSIS
+ *    - Visual confusion matrix
+ *    - Per-class precision/recall
+ *    - Error analysis
+ *    - Classification insights
+ * 
+ * 4. REPORT GENERATION
+ *    - Comprehensive evaluation report
+ *    - CSV export functionality
+ *    - Visualization ready data
+ * 
+ * INPUT: Classification results dari berbagai model
+ * OUTPUT: Evaluation metrics dan comparative analysis
+ * 
+ * @package App\Http\Controllers
+ * @author Developer
+ * @version 1.0
+ */
 class EvaluationController extends Controller
 {
+    /**
+     * Menampilkan halaman utama evaluasi model
+     * 
+     * Data yang ditampilkan:
+     * - Uploaded classification results
+     * - Comparison results (jika ada)
+     * - Confusion matrix analysis
+     * - Evaluation summary
+     * 
+     * @param Request $request HTTP request dengan session data evaluasi
+     * @return \Illuminate\View\View View 'evaluasi' dengan data lengkap
+     */
     public function index(Request $request)
     {
         $uploadedFiles = $request->session()->get('eval_uploaded_files', []);
@@ -21,6 +77,34 @@ class EvaluationController extends Controller
         ]);
     }
 
+    /**
+     * Upload hasil klasifikasi untuk evaluasi
+     * 
+     * ========================================================================
+     * FORMAT CSV YANG DIHARAPKAN
+     * ========================================================================
+     * 
+     * Required Columns:
+     * - text: Teks asli yang diklasifikasi
+     * - actual_label: Label sebenarnya (ground truth)
+     * - predicted_label: Label hasil prediksi model
+     * - confidence: Confidence score (0.0 - 1.0)
+     * 
+     * Example:
+     * text,actual_label,predicted_label,confidence
+     * "pinjol ini bagus",positif,positif,0.95
+     * "bunga terlalu tinggi",negatif,negatif,0.87
+     * 
+     * Proses Upload:
+     * 1. Validate CSV structure
+     * 2. Calculate initial metrics
+     * 3. Store dengan metadata
+     * 4. Prepare untuk comparison
+     * 
+     * @param Request $request HTTP request dengan file dan method name
+     * @return \Illuminate\Http\RedirectResponse Redirect dengan status upload
+     * @throws \Illuminate\Validation\ValidationException Jika format tidak valid
+     */
     public function uploadResults(Request $request)
     {
         $request->validate([
@@ -64,6 +148,46 @@ class EvaluationController extends Controller
         return redirect()->route('evaluation.index')->with('status', "Hasil metode '{$methodName}' berhasil diupload.");
     }
 
+    /**
+     * Membandingkan performa multiple model klasifikasi
+     * 
+     * ========================================================================
+     * PROSES COMPARISON ANALYSIS
+     * ========================================================================
+     * 
+     * 1. DATA VALIDATION
+     *    - Minimum 2 methods untuk comparison
+     *    - Load semua uploaded results
+     *    - Validate data consistency
+     * 
+     * 2. METRICS CALCULATION
+     *    - Accuracy per method
+     *    - Precision per class
+     *    - Recall per class  
+     *    - F1-Score per class
+     *    - Macro average metrics
+     * 
+     * 3. RANKING SYSTEM
+     *    - Sort by accuracy (descending)
+     *    - Assign ranking (1st, 2nd, 3rd)
+     *    - Identify best method
+     *    - Highlight performance differences
+     * 
+     * 4. COMPARISON INSIGHTS
+     *    - Performance gap analysis
+     *    - Statistical significance
+     *    - Strength/weakness per method
+     *    - Recommendation insights
+     * 
+     * Output Format:
+     * - Ranking table dengan semua metrics
+     * - Best method highlight
+     * - Performance comparison summary
+     * 
+     * @param Request $request HTTP request dengan uploaded files data
+     * @return \Illuminate\Http\RedirectResponse Redirect dengan comparison results
+     * @throws \Exception Jika kurang dari 2 methods
+     */
     public function compareMethods(Request $request)
     {
         $uploadedFiles = $request->session()->get('eval_uploaded_files', []);

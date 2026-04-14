@@ -6,8 +6,42 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
+/**
+ * Controller untuk tahap preprocessing data teks (Tahap 1 Pipeline Machine Learning)
+ * 
+ * ========================================================================
+ * FUNGSI UTAMA: Membersihkan dan memproses data mentah dari media sosial
+ * ========================================================================
+ * 
+ * Proses preprocessing yang dilakukan:
+ * 1. Case Folding - Konversi semua huruf menjadi lowercase
+ * 2. Cleansing - Menghapus URL, mention, hashtag, karakter khusus
+ * 3. Normalisasi - Mengubah slang/colloquial words ke bahasa baku
+ * 4. Tokenizing - Memecah teks menjadi kata-kata individual
+ * 5. Stopword Removal - Menghapus kata-kata umum yang tidak bernilai sentimen
+ * 6. Stemming - Mengembalikan kata ke bentuk dasarnya
+ * 
+ * INPUT: Data mentah dari Twitter/Facebook (format CSV)
+ * OUTPUT: Data bersih siap untuk proses labeling
+ * 
+ * @package App\Http\Controllers
+ * @author Developer
+ * @version 1.0
+ */
 class PreprocessingController extends Controller
 {
+    /**
+     * Menampilkan halaman utama preprocessing
+     * 
+     * Fungsi: Menampilkan interface preprocessing dengan data yang sudah diupload
+     * Data yang ditampilkan:
+     * - Path file CSV yang diupload
+     * - Preview data (header + 100 baris pertama)
+     * - Hasil preprocessing (jika sudah dijalankan)
+     * 
+     * @param Request $request HTTP request object
+     * @return \Illuminate\View\View View 'preprocessing' dengan data session
+     */
     public function index(Request $request)
     {
         $uploadedPath = $request->session()->get('pre_csv_path');
@@ -21,6 +55,25 @@ class PreprocessingController extends Controller
         ]);
     }
 
+    /**
+     * Upload file CSV data mentah untuk preprocessing
+     * 
+     * Proses upload:
+     * 1. Validasi file (CSV/TXT only)
+     * 2. Generate nama file unik dengan timestamp
+     * 3. Simpan ke storage/app/preprocessing/
+     * 4. Baca preview data (2000 baris pertama)
+     * 5. Filter kolom yang tidak diperlukan (score, time, at)
+     * 6. Simpan path dan preview ke session
+     * 
+     * Format CSV yang diharapkan:
+     * - Kolom wajib: tweet/text/content
+     * - Kolom opsional: score, time, at (akan dihapus)
+     * 
+     * @param Request $request HTTP request dengan file upload
+     * @return \Illuminate\Http\RedirectResponse Redirect ke halaman preprocessing dengan status
+     * @throws \Illuminate\Validation\ValidationException Jika file tidak valid
+     */
     public function upload(Request $request)
     {
         $request->validate([
@@ -43,6 +96,40 @@ class PreprocessingController extends Controller
         return redirect()->route('preprocessing.index')->with('status', 'File CSV berhasil diupload.');
     }
 
+    /**
+     * Menjalankan proses preprocessing lengkap pada dataset
+     * 
+     * ========================================================================
+     * ALUR PROSES PREPROCESSING LENGKAP
+     * ========================================================================
+     * 
+     * 1. VALIDASI INPUT
+     *    - Cek keberadaan file di session
+     *    - Baca semua data dari CSV
+     *    - Filter kolom yang tidak relevan
+     *    - Deteksi kolom teks otomatis
+     * 
+     * 2. PREPROCESSING PER BARIS (6 Tahap)
+     *    - Case Folding: "SAYA Suka" → "saya suka"
+     *    - Cleansing: "cek @user http://url" → "cek"
+     *    - Normalisasi: "gak" → "tidak", "bgus" → "bagus"
+     *    - Tokenizing: "saya suka" → ["saya", "suka"]
+     *    - Stopword Removal: ["saya", "suka"] → ["suka"]
+     *    - Stemming: ["suka"] → ["suka"]
+     * 
+     * 3. VALIDASI OUTPUT
+     *    - Skip data kosong (< 3 karakter)
+     *    - Skip data tanpa tokens meaningful
+     *    - Simpan semua tahap untuk debugging
+     * 
+     * 4. SIMPAN HASIL
+     *    - Store ke session untuk display
+     *    - Redirect dengan status sukses
+     * 
+     * @param Request $request HTTP request dengan session data preprocessing
+     * @return \Illuminate\Http\RedirectResponse Redirect dengan status preprocessing selesai
+     * @throws \Exception Jika file tidak ditemukan atau error processing
+     */
     public function run(Request $request)
     {
         $path = $request->session()->get('pre_csv_path');
@@ -117,6 +204,18 @@ class PreprocessingController extends Controller
         return redirect()->route('preprocessing.index')->with('status', 'Preprocessing selesai.');
     }
 
+    /**
+     * Download hasil preprocessing dalam format CSV
+     * 
+     * Output format:
+     * - Header: 'preprocessed'
+     * - Data: 1 kolom hasil stemming per baris
+     * - Filename: preprocessing_YYYYMMDD_HHMMSS.csv
+     * 
+     * @param Request $request HTTP request dengan session data preprocessing
+     * @return \Symfony\Component\HttpFoundation\StreamedResponse File CSV download
+     * @return \Illuminate\Http\RedirectResponse Jika belum ada hasil preprocessing
+     */
     public function download(Request $request): StreamedResponse
     {
         $processed = $request->session()->get('pre_processed');
@@ -141,6 +240,19 @@ class PreprocessingController extends Controller
         }, 200, $headers);
     }
 
+    /**
+     * Membaca file CSV dengan optimalisasi memory
+     * 
+     * Fitur:
+     * - Handle file besar dengan limit parameter
+     * - Auto-detect header CSV
+     * - Error handling untuk file tidak valid
+     * - Memory efficient untuk dataset besar
+     * 
+     * @param string $path Full path ke file CSV
+     * @param int|null $limit Jumlah baris maksimal yang dibaca (null = semua)
+     * @return array Array [header, rows] dengan header dan data rows
+     */
     private function readCsv(string $path, ?int $limit = 200): array
     {
         $handle = fopen($path, 'r');
@@ -206,6 +318,17 @@ class PreprocessingController extends Controller
         return [$newHeader, $newRows];
     }
 
+    /**
+     * Deteksi otomatis kolom yang berisi teks/tweet
+     * 
+     * Strategi deteksi:
+     * 1. Cari kolom dengan nama common: tweet, text, content, message, body
+     * 2. Case-insensitive matching
+     * 3. Fallback ke kolom terakhir jika tidak ditemukan
+     * 
+     * @param array $header Array nama kolom dari CSV
+     * @return int|null Index kolom teks atau null jika tidak ada
+     */
     private function detectTweetColumnIndex(array $header): ?int
     {
         if (empty($header)) return null;
@@ -220,11 +343,46 @@ class PreprocessingController extends Controller
         return count($header) ? count($header) - 1 : null;
     }
 
+    /**
+     * Tahap 1 Preprocessing: Case Folding
+     * 
+     * Fungsi: Konversi semua karakter ke huruf kecil
+     * Tujuan: Standardisasi case untuk konsistensi processing
+     * 
+     * Contoh:
+     * Input: "SAYA Suka PINJOL Online"
+     * Output: "saya suka pinjol online"
+     * 
+     * @param string $text Teks yang akan di-case folding
+     * @return string Teks dalam lowercase (UTF-8 compatible)
+     */
     private function caseFold(string $text): string
     {
         return mb_strtolower($text, 'UTF-8');
     }
 
+    /**
+     * Tahap 2 Preprocessing: Text Cleansing
+     * 
+     * Fungsi: Menghapus elemen-elemen yang tidak relevan dari teks media sosial
+     * 
+     * Yang dihapus:
+     * - URLs (http://, https://)
+     * - Email addresses
+     * - Retweet markers (rt, via)
+     * - Mention usernames (@username)
+     * - Hashtags (#hashtag)
+     * - Excessive punctuation dan quotes
+     * - Numbers dan special characters
+     * - Extra whitespace
+     * 
+     * Contoh:
+     * Input: "cek @user http://site.com #pinjol rt via"
+     * Output: "cek"
+     * 
+     * @param string $text Teks yang akan di-cleansing
+     * @return string Teks bersih dari noise elements
+     */
     private function cleanse(string $text): string
     {
         // Strip URLs, emails, mentions, hashtags

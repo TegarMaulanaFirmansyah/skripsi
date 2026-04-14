@@ -253,7 +253,7 @@ csv_file: [file]
 }
 ```
 
-### Run Classification
+### Run SVM Classification
 ```http
 POST /api/classification/run
 ```
@@ -262,11 +262,14 @@ POST /api/classification/run
 ```json
 {
     "success": true,
-    "message": "Classification completed",
+    "message": "SVM Classification completed",
     "data": {
         "accuracy": 0.852,
         "total_samples": 700,
         "correct_predictions": 596,
+        "algorithm": "SVM",
+        "kernel": "linear",
+        "regularization": 1.0,
         "metrics": {
             "positif": {
                 "precision": 0.82,
@@ -491,7 +494,13 @@ GET /api/evaluation/cleanup
     "text": "string",
     "actual_label": "positif|negatif|netral",
     "predicted_label": "positif|negatif|netral",
-    "confidence": 0.0-1.0
+    "confidence": 0.0-1.0,
+    "decision_values": {
+        "positif": 0.85,
+        "negatif": -0.23,
+        "netral": 0.12
+    },
+    "margin": 0.62
 }
 ```
 

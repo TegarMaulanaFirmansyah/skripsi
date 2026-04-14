@@ -51,6 +51,7 @@
         .confidence-fill { height:100%; background:#3182ce; transition:width 0.3s; }
         .correct { background:#f0fff4; }
         .incorrect { background:#fff5f5; }
+        @keyframes spin { to { transform: rotate(360deg); } }
         @media (min-width:1024px){ .container{ gap:32px } }
     </style>
 </head>
@@ -119,16 +120,108 @@
             </div>
 
             <!-- Run Classification -->
-            <form action="{{ route('classification.run') }}" method="post" style="margin-bottom:24px;">
+            <form action="{{ route('classification.run') }}" method="post" style="margin-bottom:24px;" id="classificationForm">
                 @csrf
                 <div class="row">
-                    <button class="btn primary" {{ (empty($trainingPath) || empty($testingPath)) ? 'disabled' : '' }}>🚀 Jalankan SVM Classification</button>
+                    <button class="btn primary" id="runButton" {{ (empty($trainingPath) || empty($testingPath)) ? 'disabled' : '' }}>🚀 Jalankan SVM Classification</button>
                     @if (!empty($results))
                         <a class="btn success" href="{{ route('classification.download') }}">📥 Download Hasil</a>
                         <a class="btn" href="{{ route('classification.cleanup') }}" style="background:#ef4444;color:white;" onclick="return confirm('Yakin ingin membersihkan semua data?')">🗑️ Bersihkan</a>
                     @endif
                 </div>
             </form>
+
+            <!-- Loading Indicator with TF-IDF Steps -->
+            <div id="loadingIndicator" style="display:none; margin-bottom:24px; padding:16px; background:#e6f3ff; border:1px solid #b3d9ff; border-radius:8px;">
+                <h4 style="margin:0 0 12px; color:#0066cc; text-align:center;">🔄 Processing Steps:</h4>
+                
+                <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+                    <div id="step-vocabulary" class="processing-step">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:12px; color:#475569;">📚 Building Vocabulary...</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="step-tfidf" class="processing-step">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:12px; color:#475569;">🔤 Computing TF-IDF...</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="step-training" class="processing-step">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:12px; color:#475569;">🤖 Training SVM Model...</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="step-prediction" class="processing-step">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:12px; color:#475569;">🎯 Making Predictions...</span>
+                            <div class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="text-align:center;">
+                    <div style="width:24px; height:24px; border:3px solid #4299e1; border-top-color:#90cdf4; border-radius:50%; animation:spin 1s linear infinite; display:inline-block;"></div>
+                    <span style="color:#0066cc; font-weight:600;">Sedang memproses data...</span>
+                </div>
+            </div>
+
+            <style>
+            .processing-step {
+                background:#f8fafc;
+                border:1px solid #e2e8f0;
+                border-radius:6px;
+                padding:8px;
+                opacity:0.5;
+                transition:all 0.3s ease;
+            }
+            
+            .processing-step.active {
+                opacity:1;
+                background:#dbeafe;
+                border-color:#3b82f6;
+            }
+            
+            .progress-bar {
+                flex:1;
+                height:4px;
+                background:#e2e8f0;
+                border-radius:2px;
+                overflow:hidden;
+            }
+            
+            .progress-fill {
+                height:100%;
+                width:0%;
+                background:#3b82f6;
+                transition:width 0.3s ease;
+            }
+            
+            .processing-step.active .progress-fill {
+                animation:progress 2s ease-in-out infinite;
+            }
+            
+            @keyframes progress {
+                0% { width:0%; }
+                50% { width:70%; }
+                100% { width:100%; }
+            }
+            
+            @keyframes spin {
+                0% { transform:rotate(0deg); }
+                100% { transform:rotate(360deg); }
+            }
+            </style>
 
             @if (!empty($trainingPreview) || !empty($testingPreview) || !empty($results))
                 <div class="tabs">
@@ -199,6 +292,45 @@
             @if (!empty($results))
                 <div id="section-results" style="display:none;">
                     <h3 style="margin:20px 0 8px; font-size:16px;">📊 Hasil Klasifikasi SVM</h3>
+                    
+                    <!-- TF-IDF Information Section -->
+                    <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:16px; margin-bottom:20px;">
+                        <h4 style="margin:0 0 12px; font-size:14px; color:#0369a1;">🔤 TF-IDF Processing Information</h4>
+                        
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:16px;">
+                            <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                                <div style="font-size:18px; font-weight:700; color:#0369a1;">{{ $results['tfidf_info']['vocabulary_size'] ?? 0 }}</div>
+                                <div style="font-size:11px; color:#64748b;">Vocabulary Size</div>
+                            </div>
+                            <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                                <div style="font-size:18px; font-weight:700; color:#0369a1;">{{ $results['tfidf_info']['total_documents'] ?? 0 }}</div>
+                                <div style="font-size:11px; color:#64748b;">Total Documents</div>
+                            </div>
+                            <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                                <div style="font-size:18px; font-weight:700; color:#0369a1;">{{ number_format($results['tfidf_info']['avg_idf'] ?? 0, 3) }}</div>
+                                <div style="font-size:11px; color:#64748b;">Average IDF</div>
+                            </div>
+                            <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                                <div style="font-size:18px; font-weight:700; color:#0369a1;">{{ $results['tfidf_info']['vector_dimensions'] ?? 0 }}</div>
+                                <div style="font-size:11px; color:#64748b;">Vector Dimensions</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Sample Vocabulary & IDF Values -->
+                        @if(isset($results['tfidf_info']['sample_vocabulary']))
+                        <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                            <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">Sample Vocabulary & IDF Values:</h5>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:6px; font-size:11px;">
+                                @foreach($results['tfidf_info']['sample_vocabulary'] as $index => $word)
+                                    <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 6px; background:#f8fafc; border-radius:4px; border:1px solid #e2e8f0;">
+                                        <span style="font-weight:600; color:#1e293b;">{{ $word }}</span>
+                                        <span style="color:#0369a1; font-weight:500;">{{ number_format($results['tfidf_info']['sample_idf_values'][$index] ?? 0, 3) }}</span>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                        @endif
+                    </div>
                     
                     <!-- Metrics Summary -->
                     <div class="metrics-grid">
@@ -298,7 +430,23 @@
             }
         }
 
+        // Handle form submission with loading indicator and step progress
         document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('classificationForm');
+            const runButton = document.getElementById('runButton');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+
+            if (form && runButton && loadingIndicator) {
+                form.addEventListener('submit', function() {
+                    runButton.disabled = true;
+                    runButton.style.opacity = '0.6';
+                    loadingIndicator.style.display = 'block';
+                    
+                    // Start step progress animation
+                    showStepProgress();
+                });
+            }
+
             if (document.getElementById('tab-results')) {
                 showTab('results');
             } else if (document.getElementById('tab-testing')) {
@@ -307,6 +455,27 @@
                 showTab('training');
             }
         });
+
+        // Function to show step progress animation
+        function showStepProgress() {
+            const steps = ['vocabulary', 'tfidf', 'training', 'prediction'];
+            const delays = [0, 1000, 2000, 3000]; // Delay in milliseconds
+            
+            steps.forEach((step, index) => {
+                setTimeout(() => {
+                    // Remove active class from all steps
+                    document.querySelectorAll('.processing-step').forEach(el => {
+                        el.classList.remove('active');
+                    });
+                    
+                    // Add active class to current step
+                    const currentStep = document.getElementById('step-' + step);
+                    if (currentStep) {
+                        currentStep.classList.add('active');
+                    }
+                }, delays[index]);
+            });
+        }
     </script>
 </body>
 </html>

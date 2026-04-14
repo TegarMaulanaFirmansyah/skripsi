@@ -2,8 +2,8 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "username/skripsi-sentiment-analysis",
     "type": "project",
-    "description": "Analisis Sentimen Masyarakat Terhadap Pinjaman Online Menggunakan Metode Support Vector Machine",
-    "keywords": ["laravel", "sentiment-analysis", "svm", "machine-learning", "indonesian-nlp", "tf-idf"],
+    "description": "Analisis Sentimen Masyarakat Terhadap Pinjaman Online Menggunakan Algoritma Support Vector Machine (SVM) yang Sesungguhnya",
+    "keywords": ["laravel", "sentiment-analysis", "svm", "support-vector-machine", "machine-learning", "indonesian-nlp", "tf-idf", "gradient-descent", "hyperplane-optimization"],
     "license": "MIT",
     "require": {
         "php": "^8.2",

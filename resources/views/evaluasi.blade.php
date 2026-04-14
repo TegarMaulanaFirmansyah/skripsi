@@ -267,49 +267,38 @@
                         </div>
                     </div>
 
-                    <!-- Visual Confusion Matrix -->
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:20px 0;">
-                        <!-- Traditional Table -->
-                        <div>
-                            <h4 style="margin:0 0 12px; font-size:14px; color:#4a5568;">📋 Tabel Confusion Matrix</h4>
-                            <div class="confusion-matrix">
-                                <table>
-                                    <thead>
+                    <!-- Confusion Matrix Table Only -->
+                    <div style="margin:20px 0;">
+                        <h4 style="margin:0 0 12px; font-size:14px; color:#4a5568;">📋 Tabel Confusion Matrix</h4>
+                        <div class="confusion-matrix">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="background:#f7fafc; font-weight:600;">Actual \ Predicted</th>
+                                        @foreach ($confusionMatrix['labels'] as $label)
+                                            <th style="background:#f7fafc; font-weight:600; text-align:center;">{{ ucfirst($label) }}</th>
+                                        @endforeach
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($confusionMatrix['labels'] as $actualLabel)
                                         <tr>
-                                            <th style="background:#f7fafc; font-weight:600;">Actual \ Predicted</th>
-                                            @foreach ($confusionMatrix['labels'] as $label)
-                                                <th style="background:#f7fafc; font-weight:600; text-align:center;">{{ ucfirst($label) }}</th>
+                                            <th style="background:#f7fafc; font-weight:600;">{{ ucfirst($actualLabel) }}</th>
+                                            @foreach ($confusionMatrix['labels'] as $predictedLabel)
+                                                @php
+                                                    $value = $confusionMatrix['matrix'][$actualLabel][$predictedLabel] ?? 0;
+                                                    $isCorrect = $actualLabel === $predictedLabel;
+                                                    $percentage = $confusionMatrix['total_samples'] > 0 ? ($value / $confusionMatrix['total_samples']) * 100 : 0;
+                                                @endphp
+                                                <td style="text-align:center; font-weight:600; position:relative; {{ $isCorrect ? 'background:#f0fff4; color:#22543d;' : 'background:#fff5f5; color:#9b2c2c;' }}">
+                                                    <div style="font-size:16px;">{{ $value }}</div>
+                                                    <div style="font-size:10px; opacity:0.7;">{{ number_format($percentage, 1) }}%</div>
+                                                </td>
                                             @endforeach
                                         </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach ($confusionMatrix['labels'] as $actualLabel)
-                                            <tr>
-                                                <th style="background:#f7fafc; font-weight:600;">{{ ucfirst($actualLabel) }}</th>
-                                                @foreach ($confusionMatrix['labels'] as $predictedLabel)
-                                                    @php
-                                                        $value = $confusionMatrix['matrix'][$actualLabel][$predictedLabel] ?? 0;
-                                                        $isCorrect = $actualLabel === $predictedLabel;
-                                                        $percentage = $confusionMatrix['total_samples'] > 0 ? ($value / $confusionMatrix['total_samples']) * 100 : 0;
-                                                    @endphp
-                                                    <td style="text-align:center; font-weight:600; position:relative; {{ $isCorrect ? 'background:#f0fff4; color:#22543d;' : 'background:#fff5f5; color:#9b2c2c;' }}">
-                                                        <div style="font-size:16px;">{{ $value }}</div>
-                                                        <div style="font-size:10px; opacity:0.7;">{{ number_format($percentage, 1) }}%</div>
-                                                    </td>
-                                                @endforeach
-                                            </tr>
-                                        @endforeach
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- Visual Chart -->
-                        <div>
-                            <h4 style="margin:0 0 12px; font-size:14px; color:#4a5568;">📊 Visualisasi Matrix</h4>
-                            <div id="confusion-matrix-chart" style="width:100%; height:300px; border:1px solid #e2e8f0; border-radius:8px; padding:16px; background:#fafafa;">
-                                <canvas id="matrixCanvas" width="280" height="280"></canvas>
-                            </div>
+                                    @endforeach
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
@@ -331,14 +320,20 @@
                                         $totalPredicted += $confusionMatrix['matrix'][$actLabel][$label] ?? 0;
                                     }
                                     $precision = $totalPredicted > 0 ? ($correct / $totalPredicted) * 100 : 0;
+                                    
+                                    // Calculate F1-Score
+                                    $f1Score = ($precision + $recall) > 0 ? (2 * $precision * $recall) / ($precision + $recall) : 0;
                                 @endphp
                                 <div style="background:white; border:1px solid #e2e8f0; border-radius:6px; padding:12px;">
                                     <div style="font-weight:600; margin-bottom:8px; color:#1a202c;">{{ ucfirst($label) }}</div>
                                     <div style="font-size:12px; color:#4a5568; margin-bottom:4px;">
                                         <strong>Recall:</strong> {{ number_format($recall, 1) }}% ({{ $correct }}/{{ $totalForLabel }})
                                     </div>
-                                    <div style="font-size:12px; color:#4a5568;">
+                                    <div style="font-size:12px; color:#4a5568; margin-bottom:4px;">
                                         <strong>Precision:</strong> {{ number_format($precision, 1) }}% ({{ $correct }}/{{ $totalPredicted }})
+                                    </div>
+                                    <div style="font-size:12px; color:#4a5568;">
+                                        <strong>F1-Score:</strong> {{ number_format($f1Score, 1) }}%
                                     </div>
                                 </div>
                             @endforeach
@@ -364,6 +359,12 @@
                                 <strong>❌ Prediksi Salah (Merah):</strong><br>
                                 • Di luar diagonal utama<br>
                                 • Contoh: Positif → Negatif = 3 data
+                            </div>
+                            <div>
+                                <strong>📊 Metrik Evaluasi:</strong><br>
+                                • <strong>Precision</strong> = TP/(TP+FP)<br>
+                                • <strong>Recall</strong> = TP/(TP+FN)<br>
+                                • <strong>F1-Score</strong> = 2×(Precision×Recall)/(Precision+Recall)
                             </div>
                         </div>
                     </div>
@@ -397,105 +398,6 @@
                 sidebar.classList.add('hidden');
             }
         }
-
-        // Confusion Matrix Visualization
-        function drawConfusionMatrix() {
-            const canvas = document.getElementById('matrixCanvas');
-            if (!canvas) return;
-            
-            const ctx = canvas.getContext('2d');
-            const size = 280;
-            const cellSize = size / 3;
-            
-            // Clear canvas
-            ctx.clearRect(0, 0, size, size);
-            
-            // Get matrix data from PHP
-            @if (!empty($confusionMatrix))
-                const matrix = @json($confusionMatrix['matrix']);
-                const labels = @json($confusionMatrix['labels']);
-                const totalSamples = {{ $confusionMatrix['total_samples'] }};
-                
-                // Draw grid
-                ctx.strokeStyle = '#e2e8f0';
-                ctx.lineWidth = 2;
-                
-                for (let i = 0; i <= 3; i++) {
-                    const pos = i * cellSize;
-                    // Vertical lines
-                    ctx.beginPath();
-                    ctx.moveTo(pos, 0);
-                    ctx.lineTo(pos, size);
-                    ctx.stroke();
-                    
-                    // Horizontal lines
-                    ctx.beginPath();
-                    ctx.moveTo(0, pos);
-                    ctx.lineTo(size, pos);
-                    ctx.stroke();
-                }
-                
-                // Draw cells with data
-                labels.forEach((actualLabel, row) => {
-                    labels.forEach((predictedLabel, col) => {
-                        const value = matrix[actualLabel] && matrix[actualLabel][predictedLabel] ? matrix[actualLabel][predictedLabel] : 0;
-                        const percentage = totalSamples > 0 ? (value / totalSamples) * 100 : 0;
-                        const isCorrect = actualLabel === predictedLabel;
-                        
-                        // Background color
-                        ctx.fillStyle = isCorrect ? '#f0fff4' : '#fff5f5';
-                        ctx.fillRect(col * cellSize + 1, row * cellSize + 1, cellSize - 2, cellSize - 2);
-                        
-                        // Border
-                        ctx.strokeStyle = isCorrect ? '#9ae6b4' : '#feb2b2';
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(col * cellSize + 1, row * cellSize + 1, cellSize - 2, cellSize - 2);
-                        
-                        // Text
-                        ctx.fillStyle = isCorrect ? '#22543d' : '#9b2c2c';
-                        ctx.font = 'bold 16px Poppins';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        
-                        const centerX = col * cellSize + cellSize / 2;
-                        const centerY = row * cellSize + cellSize / 2;
-                        
-                        // Main value
-                        ctx.fillText(value.toString(), centerX, centerY - 5);
-                        
-                        // Percentage
-                        ctx.font = '10px Poppins';
-                        ctx.fillStyle = isCorrect ? '#22543d' : '#9b2c2c';
-                        ctx.globalAlpha = 0.7;
-                        ctx.fillText(percentage.toFixed(1) + '%', centerX, centerY + 10);
-                        ctx.globalAlpha = 1;
-                    });
-                });
-                
-                // Draw labels
-                ctx.fillStyle = '#1a202c';
-                ctx.font = 'bold 12px Poppins';
-                ctx.textAlign = 'center';
-                
-                // Column labels (top)
-                labels.forEach((label, index) => {
-                    ctx.fillText(label.charAt(0).toUpperCase() + label.slice(1), 
-                                index * cellSize + cellSize / 2, 15);
-                });
-                
-                // Row labels (left)
-                ctx.textAlign = 'right';
-                labels.forEach((label, index) => {
-                    ctx.fillText(label.charAt(0).toUpperCase() + label.slice(1), 
-                                15, index * cellSize + cellSize / 2);
-                });
-            @endif
-        }
-
-        // Initialize visualization when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            drawConfusionMatrix();
-        });
     </script>
 </body>
 </html>
