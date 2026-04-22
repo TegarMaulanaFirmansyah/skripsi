@@ -81,11 +81,12 @@
         <div class="sidebar" id="sidebar">
             <div class="brand">📊 Evaluasi Model</div>
             <ul class="nav">
-                <li><a href="{{ route('dashboard') }}">🏠 Dashboard</a></li>
-                <li><a href="{{ route('preprocessing.index') }}">🔧 Preprocessing</a></li>
-                <li><a href="{{ route('labelling.index') }}">🏷️ Labelling</a></li>
-                <li><a href="{{ route('classification.index') }}">🤖 Klasifikasi</a></li>
-                <li><a href="{{ route('evaluation.index') }}" class="active">📈 Evaluasi</a></li>
+                <li><a href="{{ route('dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ route('labelling.index') }}">Labelling</a></li>
+                <li><a href="{{ route('review.index') }}">Review Data</a></li>
+                <li><a href="{{ route('preprocessing.index') }}">Preprocessing</a></li>
+                <li><a href="{{ route('classification.index') }}">Klasifikasi</a></li>
+                <li><a href="{{ route('evaluation.index') }}" class="active">Evaluasi</a></li>
             </ul>
         </div>
 
@@ -115,8 +116,8 @@
                     @csrf
                     <div class="row">
                         <div class="form-group" style="flex:1;">
-                            <label for="method_name">Nama Metode:</label>
-                            <input type="text" id="method_name" name="method_name" placeholder="Contoh: SVM, Naive Bayes, Random Forest" required>
+                            <label for="method_name">Nama File:</label>
+                            <input type="text" id="method_name" name="method_name" placeholder="Contoh: SVM_Skenario 1" required>
                         </div>
                         <div class="form-group" style="flex:1;">
                             <label for="csv_file">File CSV Hasil:</label>
@@ -353,12 +354,12 @@
                             <div>
                                 <strong>✅ Prediksi Benar (Hijau):</strong><br>
                                 • Diagonal utama (kiri atas → kanan bawah)<br>
-                                • Contoh: Positif → Positif = 45 data
+                                • Prediksi sesuai dengan label aktual
                             </div>
                             <div>
                                 <strong>❌ Prediksi Salah (Merah):</strong><br>
                                 • Di luar diagonal utama<br>
-                                • Contoh: Positif → Negatif = 3 data
+                                • Prediksi tidak sesuai dengan label aktual
                             </div>
                             <div>
                                 <strong>📊 Metrik Evaluasi:</strong><br>

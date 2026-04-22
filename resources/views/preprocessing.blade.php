@@ -20,8 +20,12 @@
         .content { flex:1; background:#ffffff; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.08); padding:32px; }
         .title { font-size:24px; line-height:1.4; font-weight:700; margin:0 0 16px; display:flex; align-items:center; gap:12px; }
         .menu-toggle { background:none; border:none; cursor:pointer; padding:4px; display:flex; flex-direction:column; gap:3px; }
-        .menu-toggle span { width:20px; height:2px; background:#1a202c; transition:0.3s; }
-        .menu-toggle:hover span { background:#3182ce; }
+        .confidence-bar { width:60px; height:4px; background:#e2e8f0; border-radius:2px; overflow:hidden; }
+        .confidence-fill { height:100%; background:#3182ce; transition:width 0.3s; }
+        .sentiment-positif { background:#f0fff4; border-color:#9ae6b4; color:#22543d; }
+        .sentiment-negatif { background:#fff5f5; border-color:#feb2b2; color:#9b2c2c; }
+        .sentiment-netral { background:#f7fafc; border-color:#e2e8f0; color:#4a5568; }
+        .sentiment-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
         .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
         .btn { appearance:none; border:1px solid #cbd5e0; background:#edf2f7; color:#1a202c; padding:8px 12px; border-radius:8px; font-weight:600; cursor:pointer; }
         .btn.primary { background:#3182ce; color:#fff; border-color:#3182ce; }
@@ -47,9 +51,11 @@
             <p class="brand">Menu</p>
             <ul class="nav">
                 <li><a href="{{ url('/') }}">Dashboard</a></li>
-                <li><a href="{{ url('/preprocessing') }}" class="active">Preprocessing</a></li>
                 <li><a href="{{ url('/labelling') }}">Labelling</a></li>
+                <li><a href="{{ url('/review') }}">Review Data</a></li>
+                <li><a href="{{ url('/preprocessing') }}" class="active">Preprocessing</a></li>
                 <li><a href="{{ url('/klasifikasi') }}">Klasifikasi</a></li>
+                <li><a href="{{ url('/evaluasi') }}">Evaluasi</a></li>
             </ul>
         </aside>
         <div class="content">
@@ -144,6 +150,9 @@
                                 <th style="width:15%;">Tokenizing</th>
                                 <th style="width:15%;">Filtering</th>
                                 <th style="width:15%;">Stemming</th>
+                                @if (!empty($processed['rows'][0]['sentiment']))
+                                    <th style="width:10%;">Sentiment</th>
+                                @endif
                             </tr>
                         </thead>
                         <tbody>
@@ -157,6 +166,13 @@
                                     <td style="font-size:12px; line-height:1.3;">{{ $r['tokenizing'] }}</td>
                                     <td style="font-size:12px; line-height:1.3;">{{ $r['filtering'] }}</td>
                                     <td style="font-size:12px; line-height:1.3;">{{ $r['stemming'] }}</td>
+                                    @if (!empty($r['sentiment']))
+                                        <td style="text-align:center;">
+                                            <span class="sentiment-badge sentiment-{{ $r['sentiment'] }}">
+                                                {{ ucfirst($r['sentiment']) }}
+                                            </span>
+                                        </td>
+                                    @endif
                                 </tr>
                             @endforeach
                         </tbody>

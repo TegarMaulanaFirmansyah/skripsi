@@ -31,8 +31,9 @@
             <p class="brand">Menu</p>
             <ul class="nav">
                 <li><a href="{{ url('/') }}" class="{{ request()->is('/') ? 'active' : '' }}">🏠 Dashboard</a></li>
-                <li><a href="{{ url('/preprocessing') }}" class="{{ request()->is('preprocessing') ? 'active' : '' }}">🔧 Preprocessing</a></li>
                 <li><a href="{{ url('/labelling') }}" class="{{ request()->is('labelling') ? 'active' : '' }}">🏷️ Labelling</a></li>
+                <li><a href="{{ url('/review') }}" class="{{ request()->is('review*') ? 'active' : '' }}">📊 Review Data</a></li>
+                <li><a href="{{ url('/preprocessing') }}" class="{{ request()->is('preprocessing') ? 'active' : '' }}">🔧 Preprocessing</a></li>
                 <li><a href="{{ url('/klasifikasi') }}" class="{{ request()->is('klasifikasi') ? 'active' : '' }}">🤖 Klasifikasi</a></li>
                 <li><a href="{{ url('/evaluasi') }}" class="{{ request()->is('evaluasi') ? 'active' : '' }}">📈 Evaluasi</a></li>
             </ul>

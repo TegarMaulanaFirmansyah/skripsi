@@ -21,6 +21,8 @@ Route::post('/labelling/upload', [LabellingController::class, 'upload'])->name('
 Route::post('/labelling/run', [LabellingController::class, 'run'])->name('labelling.run');
 Route::post('/labelling/update', [LabellingController::class, 'updateLabel'])->name('labelling.update');
 Route::post('/labelling/bulk-update', [LabellingController::class, 'bulkUpdate'])->name('labelling.bulk-update');
+Route::get('/review', [LabellingController::class, 'independentReview'])->name('review.index');
+Route::post('/review/upload', [LabellingController::class, 'uploadReview'])->name('review.upload');
 Route::get('/labelling/download', [LabellingController::class, 'download'])->name('labelling.download');
 Route::get('/labelling/cleanup', [LabellingController::class, 'cleanup'])->name('labelling.cleanup');
 

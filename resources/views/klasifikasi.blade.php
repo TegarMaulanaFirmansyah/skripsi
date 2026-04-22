@@ -61,8 +61,9 @@
             <p class="brand">Menu</p>
             <ul class="nav">
                 <li><a href="{{ url('/') }}">Dashboard</a></li>
-                <li><a href="{{ url('/preprocessing') }}">Preprocessing</a></li>
                 <li><a href="{{ url('/labelling') }}">Labelling</a></li>
+                <li><a href="{{ url('/review') }}">Review Data</a></li>
+                <li><a href="{{ url('/preprocessing') }}">Preprocessing</a></li>
                 <li><a href="{{ url('/klasifikasi') }}" class="active">Klasifikasi</a></li>
                 <li><a href="{{ url('/evaluasi') }}">Evaluasi</a></li>
             </ul>
@@ -320,16 +321,60 @@
                         @if(isset($results['tfidf_info']['sample_vocabulary']))
                         <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
                             <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">Sample Vocabulary & IDF Values:</h5>
-                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:6px; font-size:11px;">
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:6px; font-size:11px;">
                                 @foreach($results['tfidf_info']['sample_vocabulary'] as $index => $word)
-                                    <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 6px; background:#f8fafc; border-radius:4px; border:1px solid #e2e8f0;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 6px; background:#f8fafc; border-radius:4px; border:1px solid #e2e8F0;">
                                         <span style="font-weight:600; color:#1e293b;">{{ $word }}</span>
-                                        <span style="color:#0369a1; font-weight:500;">{{ number_format($results['tfidf_info']['sample_idf_values'][$index] ?? 0, 3) }}</span>
+                                        <span style="color:#0369a1; font-weight:500;">IDF: {{ number_format($results['tfidf_info']['sample_idf_values'][$index] ?? 0, 3) }}</span>
                                     </div>
                                 @endforeach
                             </div>
                         </div>
                         @endif
+
+                        <!-- TF Information -->
+                        @if(isset($results['tfidf_info']['sample_tf_values']))
+                        <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                            <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">Sample Term Frequency (TF) Values:</h5>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:6px; font-size:11px;">
+                                @foreach($results['tfidf_info']['sample_tf_values'] as $index => $tf)
+                                    <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 6px; background:#fef3c7; border-radius:4px; border:1px solid #fde68a;">
+                                        <span style="font-weight:600; color:#92400e;">{{ $tf['term'] ?? 'N/A' }}</span>
+                                        <span style="color:#92400e; font-weight:500;">TF: {{ number_format($tf['tf'] ?? 0, 3) }}</span>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                        @endif
+
+                        <!-- SVM Process Explanation -->
+                        <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                            <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">🧠 Proses Support Vector Machine (SVM)</h5>
+                            <div style="font-size:11px; line-height:1.5; color:#374151;">
+                                <p style="margin:0 0 8px;"><strong>1. Feature Extraction (TF-IDF):</strong></p>
+                                <ul style="margin:0 0 8px 16px; padding:0;">
+                                    <li><strong>TF (Term Frequency):</strong> Menghitung seberapa sering kata muncul dalam dokumen. Formula: TF = (jumlah kata dalam dokumen) / (total kata dalam dokumen)</li>
+                                    <li><strong>IDF (Inverse Document Frequency):</strong> Menghitung kepentingan kata. Kata yang jarang muncul di banyak dokumen memiliki nilai IDF tinggi. Formula: IDF = log(total dokumen / jumlah dokumen yang mengandung kata)</li>
+                                    <li><strong>TF-IDF:</strong> Kombinasi TF dan IDF untuk memberikan bobot pada kata. Kata yang sering muncul dalam dokumen tapi jarang di corpus lain akan memiliki TF-IDF tinggi.</li>
+                                </ul>
+                                
+                                <p style="margin:12px 0 8px;"><strong>2. SVM Training (One-vs-Rest):</strong></p>
+                                <ul style="margin:0 0 8px 16px; padding:0;">
+                                    <li><strong>Multi-class Classification:</strong> Untuk 3 kelas (positif, negatif, netral), SVM membangun 3 classifier binary</li>
+                                    <li><strong>Hyperplane:</strong> Mencari hyperplane optimal yang memisahkan data antar kelas dengan margin maksimum</li>
+                                    <li><strong>Support Vectors:</strong> Data points yang terdekat dengan hyperplane dan menentukan posisi hyperplane</li>
+                                    <li><strong>Kernel RBF:</strong> Menggunakan Radial Basis Function untuk memetakan data ke dimensi lebih tinggi, memungkinkan klasifikasi non-linear</li>
+                                </ul>
+                                
+                                <p style="margin:12px 0 8px;"><strong>3. Prediction:</strong></p>
+                                <ul style="margin:0 0 8px 16px; padding:0;">
+                                    <li><strong>Vector Transform:</strong> Data testing diubah ke vector TF-IDF yang sama dengan training data</li>
+                                    <li><strong>Distance Calculation:</strong> Menghitung jarak ke hyperplane setiap kelas</li>
+                                    <li><strong>Confidence Score:</strong> Berdasarkan jarak ke hyperplane, semakin dekat semakin tinggi confidence</li>
+                                    <li><strong>Final Decision:</strong> Kelas dengan confidence tertinggi dipilih sebagai prediksi</li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Metrics Summary -->

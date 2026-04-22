@@ -67,8 +67,9 @@ class PreprocessingController extends Controller
      * 6. Simpan path dan preview ke session
      * 
      * Format CSV yang diharapkan:
-     * - Kolom wajib: tweet/text/content
+     * - Kolom wajib: ulasan/text/content
      * - Kolom opsional: score, time, at (akan dihapus)
+     * - Dari labelling: raw, sentiment, confidence
      * 
      * @param Request $request HTTP request dengan file upload
      * @return \Illuminate\Http\RedirectResponse Redirect ke halaman preprocessing dengan status
@@ -86,8 +87,18 @@ class PreprocessingController extends Controller
         // Read CSV preview (first 200 rows to be safe)
         $fullPath = Storage::path($path);
         [$header, $rows] = $this->readCsv($fullPath, 2000);
-        // Drop unwanted columns like score and time/at from preview
-        [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
+        
+        // Check if this is labelled data (from labelling step)
+        $isLabelledData = $this->isLabelledData($header);
+        
+        if ($isLabelledData) {
+            // For labelled data, keep all columns (raw, sentiment, confidence)
+            $request->session()->put('pre_is_labelled', true);
+        } else {
+            // For raw data, drop unwanted columns like score and time/at
+            [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
+            $request->session()->put('pre_is_labelled', false);
+        }
 
         $request->session()->put('pre_csv_path', $path);
         $request->session()->put('pre_preview', ['header' => $header, 'rows' => $rows]);
@@ -106,8 +117,9 @@ class PreprocessingController extends Controller
      * 1. VALIDASI INPUT
      *    - Cek keberadaan file di session
      *    - Baca semua data dari CSV
-     *    - Filter kolom yang tidak relevan
+     *    - Filter kolom yang tidak relevan (untuk data mentah)
      *    - Deteksi kolom teks otomatis
+     *    - Cek apakah data sudah berlabel
      * 
      * 2. PREPROCESSING PER BARIS (6 Tahap)
      *    - Case Folding: "SAYA Suka" → "saya suka"
@@ -121,6 +133,7 @@ class PreprocessingController extends Controller
      *    - Skip data kosong (< 3 karakter)
      *    - Skip data tanpa tokens meaningful
      *    - Simpan semua tahap untuk debugging
+     *    - Untuk data berlabel: pertahankan label
      * 
      * 4. SIMPAN HASIL
      *    - Store ke session untuk display
@@ -139,77 +152,25 @@ class PreprocessingController extends Controller
 
         $fullPath = Storage::path($path);
         [$header, $rows] = $this->readCsv($fullPath, null);
-        // Drop noisy columns that shouldn't be processed as text
-        [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
-
-        // Determine tweet column
-        $tweetIndex = $this->detectTweetColumnIndex($header);
-
-        $processedRows = [];
-        foreach ($rows as $row) {
-            $tweet = $tweetIndex !== null && isset($row[$tweetIndex]) ? (string) $row[$tweetIndex] : '';
-
-            // Skip empty or very short tweets
-            if (mb_strlen(trim($tweet)) < 3) {
-                $processedRows[] = [
-                    'raw' => $tweet,
-                    'case_folding' => '',
-                    'cleansing' => '',
-                    'normalisasi' => '',
-                    'tokenizing' => '',
-                    'filtering' => '',
-                    'stemming' => '',
-                ];
-                continue;
-            }
-
-            $caseFolding = $this->caseFold($tweet);
-            $cleansed = $this->cleanse($caseFolding);
-            $normalized = $this->normalize($cleansed);
-            $normalized = $this->normalizeElongation($normalized);
-            $tokens = $this->tokenize($normalized);
-            $filteredTokens = $this->filterStopwords($tokens);
-            $stemmedTokens = $this->stemTokens($filteredTokens);
-
-            // Skip if no meaningful tokens left
-            if (empty($stemmedTokens)) {
-                $processedRows[] = [
-                    'raw' => $tweet,
-                    'case_folding' => $caseFolding,
-                    'cleansing' => $cleansed,
-                    'normalisasi' => $normalized,
-                    'tokenizing' => implode(' ', $tokens),
-                    'filtering' => implode(' ', $filteredTokens),
-                    'stemming' => '',
-                ];
-                continue;
-            }
-
-            $processedRows[] = [
-                'raw' => $tweet,
-                'case_folding' => $caseFolding,
-                'cleansing' => $cleansed,
-                'normalisasi' => $normalized,
-                'tokenizing' => implode(' ', $tokens),
-                'filtering' => implode(' ', $filteredTokens),
-                'stemming' => implode(' ', $stemmedTokens),
-            ];
+        
+        // Check if this is labelled data
+        $isLabelledData = $request->session()->get('pre_is_labelled', false);
+        
+        if ($isLabelledData) {
+            // For labelled data, process only text but keep labels
+            return $this->processLabelledData($request, $header, $rows);
+        } else {
+            // For raw data, use original processing
+            return $this->processRawData($request, $header, $rows);
         }
-
-        $request->session()->put('pre_processed', [
-            'header' => $header,
-            'rows' => $processedRows,
-        ]);
-
-        return redirect()->route('preprocessing.index')->with('status', 'Preprocessing selesai.');
     }
 
     /**
      * Download hasil preprocessing dalam format CSV
      * 
      * Output format:
-     * - Header: 'preprocessed'
-     * - Data: 1 kolom hasil stemming per baris
+     * - Untuk data mentah: Header 'preprocessed', Data: 1 kolom hasil stemming
+     * - Untuk data berlabel: Header 'preprocessed,sentiment', Data: hasil + label (tanpa confidence)
      * - Filename: preprocessing_YYYYMMDD_HHMMSS.csv
      * 
      * @param Request $request HTTP request dengan session data preprocessing
@@ -223,6 +184,7 @@ class PreprocessingController extends Controller
             return redirect()->route('preprocessing.index')->with('error', 'Belum ada hasil preprocessing.');
         }
 
+        $isLabelledData = $request->session()->get('pre_is_labelled', false);
         $filename = 'preprocessing_' . now()->format('Ymd_His') . '.csv';
 
         $headers = [
@@ -230,12 +192,23 @@ class PreprocessingController extends Controller
             'Content-Disposition' => 'attachment; filename="' . $filename . '"',
         ];
 
-        return response()->stream(function () use ($processed) {
+        return response()->stream(function () use ($processed, $isLabelledData) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['preprocessed']);
-            foreach ($processed['rows'] as $r) {
-                fputcsv($out, [$r['stemming']]);
+            
+            if ($isLabelledData) {
+                // Output for labelled data: preprocessed text + original labels (no confidence)
+                fputcsv($out, ['preprocessed', 'sentiment']);
+                foreach ($processed['rows'] as $r) {
+                    fputcsv($out, [$r['stemming'], $r['sentiment']]);
+                }
+            } else {
+                // Output for raw data: only preprocessed text
+                fputcsv($out, ['preprocessed']);
+                foreach ($processed['rows'] as $r) {
+                    fputcsv($out, [$r['stemming']]);
+                }
             }
+            
             fclose($out);
         }, 200, $headers);
     }
@@ -319,20 +292,20 @@ class PreprocessingController extends Controller
     }
 
     /**
-     * Deteksi otomatis kolom yang berisi teks/tweet
+     * Deteksi otomatis kolom yang berisi teks/ulasan
      * 
      * Strategi deteksi:
-     * 1. Cari kolom dengan nama common: tweet, text, content, message, body
+     * 1. Cari kolom dengan nama common: ulasan, text, content, message, body
      * 2. Case-insensitive matching
      * 3. Fallback ke kolom terakhir jika tidak ditemukan
      * 
      * @param array $header Array nama kolom dari CSV
      * @return int|null Index kolom teks atau null jika tidak ada
      */
-    private function detectTweetColumnIndex(array $header): ?int
+    private function detectUlasanColumnIndex(array $header): ?int
     {
         if (empty($header)) return null;
-        $candidates = ['tweet', 'text', 'content', 'message', 'body'];
+        $candidates = ['ulasan', 'text', 'content', 'message', 'body'];
         foreach ($header as $idx => $name) {
             $lower = strtolower(trim((string) $name));
             if (in_array($lower, $candidates, true)) {
@@ -369,7 +342,7 @@ class PreprocessingController extends Controller
      * Yang dihapus:
      * - URLs (http://, https://)
      * - Email addresses
-     * - Retweet markers (rt, via)
+     * - Repost markers (rt, via)
      * - Mention usernames (@username)
      * - Hashtags (#hashtag)
      * - Excessive punctuation dan quotes
@@ -382,16 +355,17 @@ class PreprocessingController extends Controller
      * 
      * @param string $text Teks yang akan di-cleansing
      * @return string Teks bersih dari noise elements
+     * 387 merupakan fungsi untuk cleaning
      */
     private function cleanse(string $text): string
     {
-        // Strip URLs, emails, mentions, hashtags
+        // hapus URLs, emails, mentions, hashtags
         $text = preg_replace('/https?:\/\/\S+/ui', ' ', $text); // URLs
         $text = preg_replace('/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/ui', ' ', $text); // emails
-        $text = preg_replace('/\b(rt|via)\b/ui', ' ', $text); // retweet markers
+        $text = preg_replace('/\b(rt|via)\b/ui', ' ', $text); // repost markers
         $text = preg_replace('/[@#][\w_]+/u', ' ', $text); // mentions & hashtags
         
-        // Remove excessive punctuation and quotes
+        // Remove tanda kutip dan tanda baca
         $text = preg_replace('/["""\'\'\']/', ' ', $text); // quotes
         $text = preg_replace('/[!]{2,}/', '!', $text); // multiple exclamation
         $text = preg_replace('/[?]{2,}/', '?', $text); // multiple question marks
@@ -405,14 +379,14 @@ class PreprocessingController extends Controller
         $text = preg_replace('/[\x{2600}-\x{26FF}]/u', ' ', $text); // misc symbols
         $text = preg_replace('/[\x{2700}-\x{27BF}]/u', ' ', $text); // dingbats
         
-        // Keep only letters, spaces, and basic punctuation
-        $text = preg_replace('/[^\p{L}\s.!?]/u', ' ', $text);
+        // Keep only huruf dan spasi
+        preg_replace('/[^\p{L}\s]/u', ' ', $text);
         
-        // Clean up spaces
+        // Clean up spasi berlebih
         $text = preg_replace('/\s+/u', ' ', $text);
         return trim($text);
     }
-
+        //fungsi untuk normalisasi kata
     private function normalize(string $text): string
     {
         // Expand slang normalization dictionary (common Indonesian/colloquial forms)
@@ -473,10 +447,12 @@ class PreprocessingController extends Controller
             'bodog' => 'bodoh','bodoh' => 'bodoh','stupid' => 'bodoh',
             'penipuan' => 'penipuan','fraud' => 'penipuan','scam' => 'penipuan',
         ];
+        //tokenize text memecahkan kalimat menjadi kata
         $tokens = $this->tokenize($text);
         $normalized = array_map(function ($t) use ($dictionary) {
             return $dictionary[$t] ?? $t;
         }, $tokens);
+        //kembalikan kata menjadi kalimat
         return implode(' ', $normalized);
     }
 
@@ -486,15 +462,16 @@ class PreprocessingController extends Controller
         $text = preg_replace('/(.)\1{2,}/u', '$1', $text);
         return $text;
     }
-
+    //memecah kalimat mendjadi kata-kata atau token
     private function tokenize(string $text): array
     {
         $text = trim($text);
         if ($text === '') return [];
+        //memecah kata berdasarkan spasi
         $parts = preg_split('/\s+/u', $text) ?: [];
         return array_values(array_filter($parts, fn($t) => $t !== ''));
     }
-
+    //stopword removal menghapus kata yang tidak penting
     private function filterStopwords(array $tokens): array
     {
         $stop = [
@@ -567,23 +544,23 @@ class PreprocessingController extends Controller
             return !in_array($t, $stop, true) && mb_strlen($t) > 2;
         }));
     }
-
+        //stemming mengubah kata menjadi dasar
     private function stemTokens(array $tokens): array
     {
         // Improved Indonesian stemmer (more conservative)
         $suffixes = ['kan','i','an','lah','kah','pun','ku','mu','nya'];
         $prefixes = ['meng','meny','men','mem','me','peng','peny','pen','pem','pe','ber','be','ter','te','per','di','ke','se'];
-
+        //memproses kata satu per satu
         $stem = function (string $word) use ($suffixes, $prefixes): string {
             $w = $word;
             $originalLength = mb_strlen($w);
             
-            // Skip stemming for very short words (less than 4 characters)
+            // Skip stemming jika kata pendek
             if ($originalLength < 4) {
                 return $w;
             }
             
-            // Skip stemming for common words that shouldn't be stemmed
+            // Skip stemming for kata tertentu
             $skipWords = ['sekali', 'penting', 'ting', 'us', 'dan', 'yang', 'ini', 'itu', 'ada', 'jadi', 'akan', 'sudah', 'bisa', 'harus', 'mau', 'ingin', 'perlu', 'boleh', 'mungkin', 'hanya', 'juga', 'saja', 'lagi', 'masih', 'sudah', 'belum', 'tidak', 'bukan', 'atau', 'dan', 'dengan', 'untuk', 'dari', 'pada', 'dalam', 'ke', 'di', 'adalah', 'akan', 'sudah', 'bisa', 'harus', 'mau', 'ingin', 'perlu', 'boleh', 'mungkin', 'hanya', 'juga', 'saja', 'lagi', 'masih', 'sudah', 'belum', 'tidak', 'bukan', 'atau'];
             
             if (in_array($w, $skipWords, true)) {
@@ -621,6 +598,199 @@ class PreprocessingController extends Controller
         };
 
         return array_map(fn($t) => $stem($t), $tokens);
+    }
+
+    /**
+     * Check if CSV data is from labelling step
+     * 
+     * @param array $header CSV header columns
+     * @return bool True if data contains labelling columns
+     */
+    private function isLabelledData(array $header): bool
+    {
+        if (empty($header)) {
+            return false;
+        }
+        
+        $headerLower = array_map('strtolower', $header);
+        
+        // Check for labelling-specific columns
+        return in_array('raw', $headerLower) && 
+               (in_array('sentiment', $headerLower) || in_array('label', $headerLower));
+    }
+
+    /**
+     * Process labelled data - only preprocess text but keep labels
+     * 
+     * @param Request $request HTTP request
+     * @param array $header CSV header
+     * @param array $rows CSV data rows
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    private function processLabelledData(Request $request, array $header, array $rows)
+    {
+        // Find column indices
+        $rawIndex = $this->findColumnIndex($header, ['raw', 'text', 'tweet', 'content']);
+        $sentimentIndex = $this->findColumnIndex($header, ['sentiment', 'label']);
+
+        $processedRows = [];
+        foreach ($rows as $row) {
+            $rawText = $rawIndex !== null && isset($row[$rawIndex]) ? (string) $row[$rawIndex] : '';
+            $sentiment = $sentimentIndex !== null && isset($row[$sentimentIndex]) ? (string) $row[$sentimentIndex] : 'netral';
+
+            // Preprocess the text (same steps as original)
+            if (mb_strlen(trim($rawText)) < 3) {
+                $processedRows[] = [
+                    'raw' => $rawText,
+                    'case_folding' => '',
+                    'cleansing' => '',
+                    'normalisasi' => '',
+                    'tokenizing' => '',
+                    'filtering' => '',
+                    'stemming' => '',
+                    'sentiment' => $sentiment,
+                ];
+                continue;
+            }
+
+            $caseFolding = $this->caseFold($rawText);
+            $cleansed = $this->cleanse($caseFolding);
+            $normalized = $this->normalize($cleansed);
+            $normalized = $this->normalizeElongation($normalized);
+            $tokens = $this->tokenize($normalized);
+            $filteredTokens = $this->filterStopwords($tokens);
+            $stemmedTokens = $this->stemTokens($filteredTokens);
+
+            if (empty($stemmedTokens)) {
+                $processedRows[] = [
+                    'raw' => $rawText,
+                    'case_folding' => $caseFolding,
+                    'cleansing' => $cleansed,
+                    'normalisasi' => $normalized,
+                    'tokenizing' => implode(' ', $tokens),
+                    'filtering' => implode(' ', $filteredTokens),
+                    'stemming' => '',
+                    'sentiment' => $sentiment,
+                ];
+                continue;
+            }
+
+            $processedRows[] = [
+                'raw' => $rawText,
+                'case_folding' => $caseFolding,
+                'cleansing' => $cleansed,
+                'normalisasi' => $normalized,
+                'tokenizing' => implode(' ', $tokens),
+                'filtering' => implode(' ', $filteredTokens),
+                'stemming' => implode(' ', $stemmedTokens),
+                'sentiment' => $sentiment,
+            ];
+        }
+
+        $request->session()->put('pre_processed', [
+            'header' => $header,
+            'rows' => $processedRows,
+        ]);
+
+        return redirect()->route('preprocessing.index')->with('status', 'Preprocessing data berlabel selesai. Label dipertahankan tanpa confidence.');
+    }
+
+    /**
+     * Process raw data (original preprocessing logic)
+     * 
+     * @param Request $request HTTP request
+     * @param array $header CSV header
+     * @param array $rows CSV data rows
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    private function processRawData(Request $request, array $header, array $rows)
+    {
+        // Drop noisy columns that shouldn't be processed as text
+        [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
+
+        // Determine ulasan column
+        $ulasanIndex = $this->detectUlasanColumnIndex($header);
+
+        $processedRows = [];
+        foreach ($rows as $row) {
+            $ulasan = $ulasanIndex !== null && isset($row[$ulasanIndex]) ? (string) $row[$ulasanIndex] : '';
+
+            // Skip empty or very short ulasan
+            if (mb_strlen(trim($ulasan)) < 3) {
+                $processedRows[] = [
+                    'raw' => $ulasan,
+                    'case_folding' => '',
+                    'cleansing' => '',
+                    'normalisasi' => '',
+                    'tokenizing' => '',
+                    'filtering' => '',
+                    'stemming' => '',
+                ];
+                continue;
+            }
+
+            $caseFolding = $this->caseFold($ulasan);
+            $cleansed = $this->cleanse($caseFolding);
+            $normalized = $this->normalize($cleansed);
+            $normalized = $this->normalizeElongation($normalized);
+            $tokens = $this->tokenize($normalized);
+            $filteredTokens = $this->filterStopwords($tokens);
+            $stemmedTokens = $this->stemTokens($filteredTokens);
+
+            // Skip if no meaningful tokens left
+            if (empty($stemmedTokens)) {
+                $processedRows[] = [
+                    'raw' => $ulasan,
+                    'case_folding' => $caseFolding,
+                    'cleansing' => $cleansed,
+                    'normalisasi' => $normalized,
+                    'tokenizing' => implode(' ', $tokens),
+                    'filtering' => implode(' ', $filteredTokens),
+                    'stemming' => '',
+                ];
+                continue;
+            }
+
+            $processedRows[] = [
+                'raw' => $ulasan,
+                'case_folding' => $caseFolding,
+                'cleansing' => $cleansed,
+                'normalisasi' => $normalized,
+                'tokenizing' => implode(' ', $tokens),
+                'filtering' => implode(' ', $filteredTokens),
+                'stemming' => implode(' ', $stemmedTokens),
+            ];
+        }
+
+        $request->session()->put('pre_processed', [
+            'header' => $header,
+            'rows' => $processedRows,
+        ]);
+
+        return redirect()->route('preprocessing.index')->with('status', 'Preprocessing selesai.');
+    }
+
+    /**
+     * Find column index by possible names
+     * 
+     * @param array $header CSV header
+     * @param array $possibleNames Possible column names
+     * @return int|null Column index or null if not found
+     */
+    private function findColumnIndex(array $header, array $possibleNames): ?int
+    {
+        if (empty($header)) {
+            return null;
+        }
+        
+        foreach ($header as $index => $columnName) {
+            $lowerName = strtolower(trim((string) $columnName));
+            if (in_array($lowerName, array_map('strtolower', $possibleNames), true)) {
+                return $index;
+            }
+        }
+        
+        return null;
     }
 }
 

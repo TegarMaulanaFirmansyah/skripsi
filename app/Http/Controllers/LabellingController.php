@@ -19,17 +19,26 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * - NETRAL: Opisi netral (informasi, fakta, tidak condong)
  * 
  * Metode Labelling:
- * 1. AUTOMATIC: Keyword-based sentiment analysis
+ * 1. AUTOMATIC: VADER-based sentiment analysis (Hutto & Gilbert, 2014)
  * 2. MANUAL: Human correction interface
  * 3. HYBRID: Auto-label + manual correction
  * 4. LEARNING: Machine learning dari manual corrections
  * 
+ * Algoritma Automatic Labelling:
+ * - VADER-inspired lexicon dengan valence scores (-2.5 hingga +2.5)
+ * - Compound score calculation dengan intensifier handling (1.293x)
+ * - Negation handling dengan flip factor (-0.74x)
+ * - Confidence normalization (0.1 hingga 0.95)
+ * 
  * INPUT: Data preprocessing hasil PreprocessingController
  * OUTPUT: Data berlabel siap untuk training SVM
  * 
+ * Reference: Hutto, C.J., & Gilbert, E.E. (2014). VADER: A Parsimonious Rule-based Model 
+ * for Sentiment Analysis of Social Media Text. ICWSM 2014.
+ * 
  * @package App\Http\Controllers
  * @author Developer  
- * @version 1.0
+ * @version 2.0 (VADER-based)
  */
 class LabellingController extends Controller
 {
@@ -97,7 +106,7 @@ class LabellingController extends Controller
      * Menjalankan proses auto-labelling sentimen
      * 
      * ========================================================================
-     * ALUR PROSES AUTO-LABELLING
+     * ALUR PROSES AUTO-LABELLING (VADER-BASED)
      * ========================================================================
      * 
      * 1. VALIDASI INPUT
@@ -105,11 +114,12 @@ class LabellingController extends Controller
      *    - Detect kolom teks otomatis
      *    - Prepare learning dari previous corrections
      * 
-     * 2. AUTO-LABELLING ALGORITHM
-     *    - Keyword-based sentiment analysis
-     *    - Confidence score calculation
-     *    - Multi-keyword weight calculation
-     *    - Context-aware sentiment detection
+     * 2. VADER-BASED AUTO-LABELLING
+     *    - VADER-inspired lexicon sentiment analysis
+     *    - Compound score calculation (Hutto & Gilbert, 2014)
+     *    - Intensifier handling (boost factor: 1.293)
+     *    - Negation handling (flip factor: -0.74)
+     *    - Valence-based confidence scoring
      * 
      * 3. LEARNING MECHANISM
      *    - Learn dari manual corrections sebelumnya
@@ -121,8 +131,9 @@ class LabellingController extends Controller
      *    - Pagination support untuk dataset besar
      *    - Ready untuk manual correction
      * 
-     * Algorithm: Keyword matching dengan weighted scoring
-     * Confidence: 0.0 - 1.0 (higher = more confident)
+     * Algorithm: VADER-based sentiment analysis with Indonesian lexicon
+     * Reference: Hutto & Gilbert (2014) - VADER: A Parsimonious Rule-based Model
+     * Confidence: 0.1 - 0.95 (normalized from VADER compound score)
      * 
      * @param Request $request HTTP request dengan session data preprocessing
      * @return \Illuminate\Http\RedirectResponse Redirect dengan status labelling selesai
@@ -130,65 +141,107 @@ class LabellingController extends Controller
      */
     public function run(Request $request)
     {
-        $path = $request->session()->get('label_csv_path');
-        if (!$path || !Storage::exists($path)) {
-            return redirect()->route('labelling.index')->with('error', 'Tidak ada file yang diupload.');
-        }
+        try {
+            $path = $request->session()->get('label_csv_path');
+            if (!$path || !Storage::exists($path)) {
+                return redirect()->route('labelling.index')->with('error', 'Tidak ada file yang diupload.');
+            }
 
-        $fullPath = Storage::path($path);
-        [$header, $rows] = $this->readCsv($fullPath, null);
-        // Drop noisy columns that shouldn't be processed as text
-        [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
+            $fullPath = Storage::path($path);
+            if (!file_exists($fullPath)) {
+                return redirect()->route('labelling.index')->with('error', 'File CSV tidak ditemukan.');
+            }
 
-        // Determine tweet column
-        $tweetIndex = $this->detectTweetColumnIndex($header);
+            [$header, $rows] = $this->readCsv($fullPath, null);
+            if (empty($header) || empty($rows)) {
+                return redirect()->route('labelling.index')->with('error', 'File CSV kosong atau tidak valid.');
+            }
 
-        $labeledRows = [];
-        foreach ($rows as $row) {
-            $tweet = $tweetIndex !== null && isset($row[$tweetIndex]) ? (string) $row[$tweetIndex] : '';
+            // Drop noisy columns that shouldn't be processed as text
+            [$header, $rows] = $this->filterColumns($header, $rows, ['score', 'time', 'at']);
+
+            // Determine ulasan column
+            $ulasanIndex = $this->detectUlasanColumnIndex($header);
+            if ($ulasanIndex === null) {
+                return redirect()->route('labelling.index')->with('error', 'Tidak dapat menemukan kolom teks/ulasan. Pastikan file CSV memiliki kolom teks.');
+            }
+
+            $labeledRows = [];
+            foreach ($rows as $index => $row) {
+                $ulasan = $ulasanIndex !== null && isset($row[$ulasanIndex]) ? (string) $row[$ulasanIndex] : '';
+                
+                // Skip empty rows
+                if (empty(trim($ulasan))) {
+                    continue;
+                }
+                
+                // Auto-labeling based on keywords
+                $sentiment = $this->autoLabelSentiment($request, $ulasan);
+                $vaderScore = $this->calculateConfidence($ulasan, $sentiment, $request);
+
+                // Debug: Log VADER score untuk checking
+                \Log::info("Text: {$ulasan} | Sentiment: {$sentiment} | VADER Score: {$vaderScore}");
+
+                $labeledRows[] = [
+                    'raw' => $ulasan,
+                    'sentiment' => $sentiment,
+                    'confidence' => $vaderScore, // Ini sekarang VADER score
+                ];
+            }
+
+            if (empty($labeledRows)) {
+                return redirect()->route('labelling.index')->with('error', 'Tidak ada data yang dapat diproses. Pastikan file CSV memiliki data teks yang valid.');
+            }
+
+            // Learn from any existing manual corrections
+            $existingLabeled = $request->session()->get('label_labeled');
+            if ($existingLabeled && isset($existingLabeled['rows'])) {
+                $this->learnFromCorrections($request, $existingLabeled['rows']);
+            }
+
+            // Store data in temporary file instead of session
+            $tempFile = 'temp_labeling_' . uniqid() . '.json';
+            $tempPath = storage_path('app/temp/' . $tempFile);
             
-            // Auto-labeling based on keywords (simple approach)
-            $sentiment = $this->autoLabelSentiment($request, $tweet);
+            // Create temp directory if not exists
+            $tempDir = storage_path('app/temp');
+            if (!file_exists($tempDir)) {
+                if (!mkdir($tempDir, 0755, true)) {
+                    return redirect()->route('labelling.index')->with('error', 'Tidak dapat membuat direktori temporary.');
+                }
+            }
+            
+            // Save all data to temporary file
+            $jsonData = json_encode([
+                'header' => $header,
+                'rows' => $labeledRows,
+                'total_count' => count($labeledRows),
+            ]);
+            
+            if (file_put_contents($tempPath, $jsonData) === false) {
+                return redirect()->route('labelling.index')->with('error', 'Tidak dapat menyimpan data ke file temporary.');
+            }
+            
+            // Store only file reference and first page data in session
+            $request->session()->put('label_temp_file', $tempFile);
+            $request->session()->put('label_total_data', count($labeledRows));
+            
+            // Calculate sentiment distribution
+            $sentimentDistribution = $this->calculateSentimentDistribution($labeledRows);
+            $request->session()->put('sentiment_distribution', $sentimentDistribution);
 
-            $labeledRows[] = [
-                'raw' => $tweet,
-                'sentiment' => $sentiment,
-                'confidence' => $this->calculateConfidence($tweet, $sentiment),
-            ];
+            $request->session()->put('label_labeled', [
+                'header' => $header,
+                'rows' => array_slice($labeledRows, 0, 100), // Limit to first 100 rows
+                'total_count' => count($labeledRows),
+            ]);
+
+            return redirect()->route('labelling.index')->with('status', 'Labelling selesai. ' . count($labeledRows) . ' data berhasil diproses. Silakan download data dan upload ke Review Data untuk melihat sebaran sentiment.');
+
+        } catch (\Exception $e) {
+            \Log::error('Auto Labelling Error: ' . $e->getMessage());
+            return redirect()->route('labelling.index')->with('error', 'Terjadi kesalahan saat proses auto labelling: ' . $e->getMessage());
         }
-
-        // Learn from any existing manual corrections
-        $existingLabeled = $request->session()->get('label_labeled');
-        if ($existingLabeled && isset($existingLabeled['rows'])) {
-            $this->learnFromCorrections($request, $existingLabeled['rows']);
-        }
-
-        // Store data in temporary file instead of session
-        $tempFile = 'temp_labeling_' . uniqid() . '.json';
-        $tempPath = storage_path('app/temp/' . $tempFile);
-        
-        // Create temp directory if not exists
-        if (!file_exists(storage_path('app/temp'))) {
-            mkdir(storage_path('app/temp'), 0755, true);
-        }
-        
-        // Save all data to temporary file
-        file_put_contents($tempPath, json_encode([
-            'header' => $header,
-            'rows' => $labeledRows,
-            'total_count' => count($labeledRows),
-        ]));
-        
-        // Store only file reference and first page data in session
-        $request->session()->put('label_temp_file', $tempFile);
-        $request->session()->put('label_total_data', count($labeledRows));
-        $request->session()->put('label_labeled', [
-            'header' => $header,
-            'rows' => array_slice($labeledRows, 0, 100), // Limit to first 100 rows
-            'total_count' => count($labeledRows),
-        ]);
-
-        return redirect()->route('labelling.index')->with('status', 'Labelling selesai.');
     }
 
     public function getPage(Request $request)
@@ -433,10 +486,10 @@ class LabellingController extends Controller
         return [$newHeader, $newRows];
     }
 
-    private function detectTweetColumnIndex(array $header): ?int
+    private function detectUlasanColumnIndex(array $header): ?int
     {
         if (empty($header)) return null;
-        $candidates = ['tweet', 'text', 'content', 'message', 'body', 'review', 'ulasan'];
+        $candidates = ['ulasan', 'text', 'content', 'message', 'body', 'review'];
         foreach ($header as $idx => $name) {
             $lower = strtolower(trim((string) $name));
             if (in_array($lower, $candidates, true)) {
@@ -454,289 +507,212 @@ class LabellingController extends Controller
         // Get learned keywords from manual corrections
         $learnedKeywords = $this->getLearnedKeywords($request);
         
-        // Enhanced positive keywords with weights
-        $positiveKeywords = array_merge([
-            // Strong positive (weight: 3)
-            'sangat bagus', 'sangat baik', 'sangat puas', 'sangat senang', 'sangat suka',
-            'terbaik', 'terlalu bagus', 'terlalu baik', 'benar-benar bagus', 'benar-benar baik',
-            'perfect', 'sempurna', 'awesome', 'amazing', 'fantastic', 'brilliant', 'excellent',
-            'love', 'loved', 'loving', 'recommended', 'recommend', 'highly recommend',
+        // VADER lexicon for Indonesian sentiment analysis
+        // Based on Hutto & Gilbert (2014) - VADER: A Parsimonious Rule-based Model
+        $vaderLexicon = [
+            // Positive words (positive valence)
+            'sangat bagus' => 0.25, 'sangat baik' => 0.25, 'sangat puas' => 0.25, 'terbaik' => 0.25,
+            'terlalu bagus' => 0.24, 'terlalu baik' => 0.24, 'benar-benar bagus' => 0.24, 'benar-benar baik' => 0.24,
+            'perfect' => 0.25, 'sempurna' => 0.25, 'awesome' => 0.25, 'amazing' => 0.25, 'fantastic' => 0.25,
+            'brilliant' => 0.25, 'excellent' => 0.25, 'love' => 0.25, 'loved' => 0.25, 'loving' => 0.25,
+            'recommended' => 0.25, 'recommend' => 0.25, 'highly recommend' => 0.25,
+            'bagus' => 0.20, 'baik' => 0.20, 'mantap' => 0.20, 'keren' => 0.20, 'suka' => 0.20,
+            'senang' => 0.20, 'puas' => 0.20, 'great' => 0.20, 'good' => 0.20, 'nice' => 0.20,
+            'wonderful' => 0.20, 'memuaskan' => 0.20, 'kepuasan' => 0.20, 'enjoy' => 0.20, 'fun' => 0.20,
+            'enak' => 0.20, 'lezat' => 0.20, 'nyaman' => 0.20, 'mudah' => 0.20, 'simple' => 0.20,
+            'praktis' => 0.20, 'berhasil' => 0.20, 'sukses' => 0.20, 'menang' => 0.20, 'profit' => 0.20,
+            'untung' => 0.20, 'benefit' => 0.20, 'helpful' => 0.20, 'useful' => 0.20, 'effective' => 0.20,
+            'efficient' => 0.20, 'fast' => 0.20, 'cepat' => 0.20, 'lancar' => 0.20, 'smooth' => 0.20,
+            'aman' => 0.20, 'safe' => 0.20, 'secure' => 0.20, 'amanah' => 0.20, 'trustworthy' => 0.20,
+            'ok' => 0.15, 'okay' => 0.15, 'fine' => 0.15, 'alright' => 0.15, 'bisa' => 0.15,
+            'boleh' => 0.15, 'mungkin' => 0.15, 'hampir' => 0.15, 'hampir bagus' => 0.15, 'lumayan' => 0.15,
+            'cukup' => 0.15, 'decent' => 0.15, 'acceptable' => 0.15, 'satisfied' => 0.15, 'satisfaction' => 0.15,
             
-            // Medium positive (weight: 2)
-            'bagus', 'baik', 'mantap', 'keren', 'suka', 'senang', 'puas', 'great', 'good', 'nice',
-            'wonderful', 'memuaskan', 'kepuasan', 'enjoy', 'fun', 'enak', 'lezat', 'nyaman',
-            'mudah', 'simple', 'praktis', 'berhasil', 'sukses', 'menang', 'profit', 'untung',
-            'benefit', 'helpful', 'useful', 'effective', 'efficient', 'fast', 'cepat',
-            'lancar', 'smooth', 'aman', 'safe', 'secure', 'amanah', 'trustworthy',
+            // Negative words (negative valence)
+            'sangat buruk' => -0.25, 'sangat jelek' => -0.25, 'sangat kecewa' => -0.25, 'sangat menyesal' => -0.25,
+            'sangat gagal' => -0.25, 'terburuk' => -0.25, 'terlalu buruk' => -0.25, 'terlalu jelek' => -0.25,
+            'benar-benar buruk' => -0.25, 'benar-benar jelek' => -0.25, 'terrible' => -0.25, 'awful' => -0.25,
+            'horrible' => -0.25, 'disgusting' => -0.25, 'hate' => -0.25, 'hated' => -0.25, 'hating' => -0.25,
+            'worst' => -0.25, 'sucks' => -0.25, 'sucked' => -0.25, 'sucking' => -0.25, 'disappointed' => -0.25,
+            'disappointing' => -0.25,
+            'buruk' => -0.20, 'jelek' => -0.20, 'gagal' => -0.20, 'fail' => -0.20, 'failed' => -0.20,
+            'failing' => -0.20, 'error' => -0.20, 'salah' => -0.20, 'wrong' => -0.20, 'rusak' => -0.20,
+            'broken' => -0.20, 'menyesal' => -0.20, 'kecewa' => -0.20, 'regret' => -0.20, 'boring' => -0.20,
+            'membosankan' => -0.20, 'ribet' => -0.20, 'sulit' => -0.20, 'difficult' => -0.20, 'hard' => -0.20,
+            'complicated' => -0.20, 'complex' => -0.20, 'confusing' => -0.20, 'mahal' => -0.20, 'expensive' => -0.20,
+            'overpriced' => -0.20, 'rugi' => -0.20, 'loss' => -0.20, 'kerugian' => -0.20, 'waste' => -0.20,
+            'lambat' => -0.20, 'slow' => -0.20, 'delay' => -0.20, 'terlambat' => -0.20, 'late' => -0.20,
+            'menunggu' => -0.20, 'waiting' => -0.20, 'ganggu' => -0.20, 'disturb' => -0.20, 'disturbing' => -0.20,
+            'annoying' => -0.20, 'frustrating' => -0.20, 'frustrated' => -0.20, 'penipuan' => -0.20,
+            'fraud' => -0.20, 'scam' => -0.20, 'scamming' => -0.20, 'cheat' => -0.20, 'cheating' => -0.20,
+            'fake' => -0.20,
+            'tidak bagus' => -0.15, 'tidak baik' => -0.15, 'tidak suka' => -0.15, 'tidak senang' => -0.15,
+            'tidak puas' => -0.15, 'gak bagus' => -0.15, 'ga bagus' => -0.15, 'nggak bagus' => -0.15,
+            'enggak bagus' => -0.15, 'tdk bagus' => -0.15, 'bukan bagus' => -0.15, 'bukan baik' => -0.15,
+            'bukan suka' => -0.15, 'bukan senang' => -0.15, 'bukan puas' => -0.15, 'biasa' => -0.15,
+            'mediocre' => -0.15, 'average' => -0.15, 'standar' => -0.15, 'normal' => -0.15, 'so-so' => -0.15, 'meh' => -0.15,
             
-            // Weak positive (weight: 1)
-            'ok', 'okay', 'fine', 'alright', 'bisa', 'boleh', 'mungkin', 'hampir', 'hampir bagus',
-            'lumayan', 'cukup', 'decent', 'acceptable', 'satisfied', 'satisfaction'
-        ], $learnedKeywords['positive'] ?? []);
-        
-        // Enhanced negative keywords with weights
-        $negativeKeywords = array_merge([
-            // Strong negative (weight: 3)
-            'sangat buruk', 'sangat jelek', 'sangat kecewa', 'sangat menyesal', 'sangat gagal',
-            'terburuk', 'terlalu buruk', 'terlalu jelek', 'benar-benar buruk', 'benar-benar jelek',
-            'terrible', 'awful', 'horrible', 'disgusting', 'hate', 'hated', 'hating',
-            'worst', 'sucks', 'sucked', 'sucking', 'disappointed', 'disappointing',
-            
-            // Medium negative (weight: 2)
-            'buruk', 'jelek', 'gagal', 'fail', 'failed', 'failing', 'error', 'salah', 'wrong',
-            'rusak', 'broken', 'menyesal', 'kecewa', 'regret', 'boring', 'membosankan',
-            'ribet', 'sulit', 'difficult', 'hard', 'complicated', 'complex', 'confusing',
-            'mahal', 'expensive', 'overpriced', 'rugi', 'loss', 'kerugian', 'waste',
-            'lambat', 'slow', 'delay', 'terlambat', 'late', 'menunggu', 'waiting',
-            'ganggu', 'disturb', 'disturbing', 'annoying', 'frustrating', 'frustrated',
-            'penipuan', 'fraud', 'scam', 'scamming', 'cheat', 'cheating', 'fake',
-            
-            // Weak negative (weight: 1)
-            'tidak bagus', 'tidak baik', 'tidak suka', 'tidak senang', 'tidak puas',
-            'gak bagus', 'ga bagus', 'nggak bagus', 'enggak bagus', 'tdk bagus',
-            'bukan bagus', 'bukan baik', 'bukan suka', 'bukan senang', 'bukan puas',
-            'biasa', 'mediocre', 'average', 'standar', 'normal', 'so-so', 'meh'
-        ], $learnedKeywords['negative'] ?? []);
-        
-        // Neutral indicators
-        $neutralKeywords = [
-            'netral', 'neutral', 'biasa', 'normal', 'standar', 'average', 'mediocre',
-            'ok', 'okay', 'fine', 'alright', 'so-so', 'meh', 'tidak tahu', 'gak tahu',
-            'mungkin', 'perhaps', 'maybe', 'bisa jadi', 'kemungkinan', 'probable'
+            // Neutral words (valence near 0)
+            'netral' => 0.0, 'neutral' => 0.0, 'biasa' => 0.0, 'normal' => 0.0, 'standar' => 0.0,
+            'average' => 0.0, 'mediocre' => 0.0, 'tidak tahu' => 0.0, 'gak tahu' => 0.0,
+            'mungkin' => 0.0, 'perhaps' => 0.0, 'maybe' => 0.0, 'bisa jadi' => 0.0, 'kemungkinan' => 0.0,
+            'probable' => 0.0
         ];
         
-        // Calculate weighted scores
-        $positiveScore = 0;
-        $negativeScore = 0;
-        $neutralScore = 0;
+        // Merge dengan learned keywords
+        if (isset($learnedKeywords['positive'])) {
+            foreach ($learnedKeywords['positive'] as $keyword) {
+                $vaderLexicon[$keyword] = 0.15; // Default positive valence untuk learned words
+            }
+        }
         
-        // Check for strong positive patterns
-        foreach ($positiveKeywords as $keyword) {
+        if (isset($learnedKeywords['negative'])) {
+            foreach ($learnedKeywords['negative'] as $keyword) {
+                $vaderLexicon[$keyword] = -0.15; // Default negative valence untuk learned words
+            }
+        }
+        
+        // VADER ORIGINAL: Single compound score calculation
+        $compoundScore = 0.0;
+        
+        // Calculate compound score dengan menjumlahkan semua valence
+        foreach ($vaderLexicon as $keyword => $valence) {
             if (str_contains($text, $keyword)) {
-                if (str_contains($keyword, 'sangat ') || str_contains($keyword, 'terlalu ') || 
-                    str_contains($keyword, 'benar-benar ') || in_array($keyword, ['perfect', 'sempurna', 'awesome', 'amazing', 'fantastic', 'brilliant', 'excellent', 'love', 'loved', 'loving', 'recommended', 'recommend', 'highly recommend'])) {
-                    $positiveScore += 3; // Strong positive
-                } elseif (in_array($keyword, ['bagus', 'baik', 'mantap', 'keren', 'suka', 'senang', 'puas', 'great', 'good', 'nice', 'wonderful', 'memuaskan', 'kepuasan', 'enjoy', 'fun', 'enak', 'lezat', 'nyaman', 'mudah', 'simple', 'praktis', 'berhasil', 'sukses', 'menang', 'profit', 'untung', 'benefit', 'helpful', 'useful', 'effective', 'efficient', 'fast', 'cepat', 'lancar', 'smooth', 'aman', 'safe', 'secure', 'amanah', 'trustworthy'])) {
-                    $positiveScore += 2; // Medium positive
-                } else {
-                    $positiveScore += 1; // Weak positive
-                }
+                $compoundScore += $valence;
             }
         }
         
-        // Check for strong negative patterns
-        foreach ($negativeKeywords as $keyword) {
-            if (str_contains($text, $keyword)) {
-                if (str_contains($keyword, 'sangat ') || str_contains($keyword, 'terlalu ') || 
-                    str_contains($keyword, 'benar-benar ') || in_array($keyword, ['terrible', 'awful', 'horrible', 'disgusting', 'hate', 'hated', 'hating', 'worst', 'sucks', 'sucked', 'sucking', 'disappointed', 'disappointing'])) {
-                    $negativeScore += 3; // Strong negative
-                } elseif (in_array($keyword, ['buruk', 'jelek', 'gagal', 'fail', 'failed', 'failing', 'error', 'salah', 'wrong', 'rusak', 'broken', 'menyesal', 'kecewa', 'regret', 'boring', 'membosankan', 'ribet', 'sulit', 'difficult', 'hard', 'complicated', 'complex', 'confusing', 'mahal', 'expensive', 'overpriced', 'rugi', 'loss', 'kerugian', 'waste', 'lambat', 'slow', 'delay', 'terlambat', 'late', 'menunggu', 'waiting', 'ganggu', 'disturb', 'disturbing', 'annoying', 'frustrating', 'frustrated', 'penipuan', 'fraud', 'scam', 'scamming', 'cheat', 'cheating', 'fake'])) {
-                    $negativeScore += 2; // Medium negative
-                } else {
-                    $negativeScore += 1; // Weak negative
-                }
-            }
-        }
-        
-        // Check for neutral patterns
-        foreach ($neutralKeywords as $keyword) {
-            if (str_contains($text, $keyword)) {
-                $neutralScore += 1;
-            }
-        }
-        
-        // Check for negation patterns that might reverse sentiment
-        $negationWords = ['tidak', 'gak', 'ga', 'nggak', 'enggak', 'tdk', 'gk', 'tak', 'tk', 'bukan', 'bkn', 'no', 'not', 'never', 'neither', 'nor'];
-        $hasNegation = false;
-        foreach ($negationWords as $neg) {
-            if (str_contains($text, $neg)) {
-                $hasNegation = true;
-                break;
-            }
-        }
-        
-        // If there's negation, reduce the dominant score
-        if ($hasNegation) {
-            if ($positiveScore > $negativeScore) {
-                $positiveScore = max(0, $positiveScore - 1);
-            } elseif ($negativeScore > $positiveScore) {
-                $negativeScore = max(0, $negativeScore - 1);
-            }
-        }
-        
-        // Check for intensifiers that boost sentiment
+        // Handle intensifiers (VADER rule: intensifier boosts valence)
         $intensifiers = ['sangat', 'banget', 'sekali', 'terlalu', 'benar-benar', 'really', 'very', 'so', 'extremely', 'highly'];
-        $hasIntensifier = false;
-        foreach ($intensifiers as $int) {
-            if (str_contains($text, $int)) {
-                $hasIntensifier = true;
+        foreach ($intensifiers as $intensifier) {
+            if (str_contains($text, $intensifier)) {
+                $compoundScore *= 1.293; // VADER intensifier boost
                 break;
             }
         }
         
-        // If there's intensifier, boost the dominant score
-        if ($hasIntensifier) {
-            if ($positiveScore > $negativeScore) {
-                $positiveScore += 1;
-            } elseif ($negativeScore > $positiveScore) {
-                $negativeScore += 1;
+        // Handle negation (VADER rule: negation flips valence)
+        $negationWords = ['tidak', 'gak', 'ga', 'nggak', 'enggak', 'tdk', 'gk', 'tak', 'tk', 'bukan', 'bkn', 'no', 'not', 'never', 'neither', 'nor'];
+        foreach ($negationWords as $negation) {
+            if (str_contains($text, $negation)) {
+                $compoundScore *= -0.74; // VADER negation factor
+                break;
             }
         }
         
-        // Determine sentiment based on weighted scores
-        if ($positiveScore > $negativeScore && $positiveScore > $neutralScore) {
+        // VADER ORIGINAL: Standard threshold logic
+        if ($compoundScore >= 0.05) {
             return 'positif';
-        } elseif ($negativeScore > $positiveScore && $negativeScore > $neutralScore) {
+        } elseif ($compoundScore <= -0.05) {
             return 'negatif';
         } else {
             return 'netral';
         }
     }
 
-    private function calculateConfidence(string $text, string $sentiment): float
+    private function calculateConfidence(string $text, string $sentiment, Request $request): float
     {
         $text = mb_strtolower($text, 'UTF-8');
         
-        // Enhanced confidence calculation based on multiple factors
-        $confidence = 0.0;
+        // Get learned keywords untuk consistency dengan autoLabelSentiment
+        $learnedKeywords = $this->getLearnedKeywords($request);
         
-        // Factor 1: Keyword strength and frequency
-        $strongKeywords = [
-            'positif' => ['sangat bagus', 'sangat baik', 'sangat puas', 'terbaik', 'perfect', 'sempurna', 'awesome', 'amazing', 'fantastic', 'brilliant', 'excellent', 'love', 'loved', 'recommended', 'highly recommend'],
-            'negatif' => ['sangat buruk', 'sangat jelek', 'sangat kecewa', 'terburuk', 'terrible', 'awful', 'horrible', 'disgusting', 'hate', 'hated', 'worst', 'sucks', 'disappointed'],
-            'netral' => ['netral', 'neutral', 'biasa', 'normal', 'standar', 'average', 'mediocre', 'ok', 'okay', 'fine', 'alright']
+        // VADER lexicon (sama persis dengan autoLabelSentiment)
+        $vaderLexicon = [
+            // Positive words (positive valence)
+            'sangat bagus' => 0.25, 'sangat baik' => 0.25, 'sangat puas' => 0.25, 'terbaik' => 0.25,
+            'terlalu bagus' => 0.24, 'terlalu baik' => 0.24, 'benar-benar bagus' => 0.24, 'benar-benar baik' => 0.24,
+            'perfect' => 0.25, 'sempurna' => 0.25, 'awesome' => 0.25, 'amazing' => 0.25, 'fantastic' => 0.25,
+            'brilliant' => 0.25, 'excellent' => 0.25, 'love' => 0.25, 'loved' => 0.25, 'loving' => 0.25,
+            'recommended' => 0.25, 'recommend' => 0.25, 'highly recommend' => 0.25,
+            'bagus' => 0.20, 'baik' => 0.20, 'mantap' => 0.20, 'keren' => 0.20, 'suka' => 0.20,
+            'senang' => 0.20, 'puas' => 0.20, 'great' => 0.20, 'good' => 0.20, 'nice' => 0.20,
+            'wonderful' => 0.20, 'memuaskan' => 0.20, 'kepuasan' => 0.20, 'enjoy' => 0.20, 'fun' => 0.20,
+            'enak' => 0.20, 'lezat' => 0.20, 'nyaman' => 0.20, 'mudah' => 0.20, 'simple' => 0.20,
+            'praktis' => 0.20, 'berhasil' => 0.20, 'sukses' => 0.20, 'menang' => 0.20, 'profit' => 0.20,
+            'untung' => 0.20, 'benefit' => 0.20, 'helpful' => 0.20, 'useful' => 0.20, 'effective' => 0.20,
+            'efficient' => 0.20, 'fast' => 0.20, 'cepat' => 0.20, 'lancar' => 0.20, 'smooth' => 0.20,
+            'aman' => 0.20, 'safe' => 0.20, 'secure' => 0.20, 'amanah' => 0.20, 'trustworthy' => 0.20,
+            'ok' => 0.15, 'okay' => 0.15, 'fine' => 0.15, 'alright' => 0.15, 'bisa' => 0.15,
+            'boleh' => 0.15, 'mungkin' => 0.15, 'hampir' => 0.15, 'hampir bagus' => 0.15, 'lumayan' => 0.15,
+            'cukup' => 0.15, 'decent' => 0.15, 'acceptable' => 0.15, 'satisfied' => 0.15, 'satisfaction' => 0.15,
+            
+            // Negative words (negative valence)
+            'sangat buruk' => -0.25, 'sangat jelek' => -0.25, 'sangat kecewa' => -0.25, 'sangat menyesal' => -0.25,
+            'sangat gagal' => -0.25, 'terburuk' => -0.25, 'terlalu buruk' => -0.25, 'terlalu jelek' => -0.25,
+            'benar-benar buruk' => -0.25, 'benar-benar jelek' => -0.25, 'terrible' => -0.25, 'awful' => -0.25,
+            'horrible' => -0.25, 'disgusting' => -0.25, 'hate' => -0.25, 'hated' => -0.25, 'hating' => -0.25,
+            'worst' => -0.25, 'sucks' => -0.25, 'sucked' => -0.25, 'sucking' => -0.25, 'disappointed' => -0.25,
+            'disappointing' => -0.25,
+            'buruk' => -0.20, 'jelek' => -0.20, 'gagal' => -0.20, 'fail' => -0.20, 'failed' => -0.20,
+            'failing' => -0.20, 'error' => -0.20, 'salah' => -0.20, 'wrong' => -0.20, 'rusak' => -0.20,
+            'broken' => -0.20, 'menyesal' => -0.20, 'kecewa' => -0.20, 'regret' => -0.20, 'boring' => -0.20,
+            'membosankan' => -0.20, 'ribet' => -0.20, 'sulit' => -0.20, 'difficult' => -0.20, 'hard' => -0.20,
+            'complicated' => -0.20, 'complex' => -0.20, 'confusing' => -0.20, 'mahal' => -0.20, 'expensive' => -0.20,
+            'overpriced' => -0.20, 'rugi' => -0.20, 'loss' => -0.20, 'kerugian' => -0.20, 'waste' => -0.20,
+            'lambat' => -0.20, 'slow' => -0.20, 'delay' => -0.20, 'terlambat' => -0.20, 'late' => -0.20,
+            'menunggu' => -0.20, 'waiting' => -0.20, 'ganggu' => -0.20, 'disturb' => -0.20, 'disturbing' => -0.20,
+            'annoying' => -0.20, 'frustrating' => -0.20, 'frustrated' => -0.20, 'penipuan' => -0.20,
+            'fraud' => -0.20, 'scam' => -0.20, 'scamming' => -0.20, 'cheat' => -0.20, 'cheating' => -0.20,
+            'fake' => -0.20,
+            'tidak bagus' => -0.15, 'tidak baik' => -0.15, 'tidak suka' => -0.15, 'tidak senang' => -0.15,
+            'tidak puas' => -0.15, 'gak bagus' => -0.15, 'ga bagus' => -0.15, 'nggak bagus' => -0.15,
+            'enggak bagus' => -0.15, 'tdk bagus' => -0.15, 'bukan bagus' => -0.15, 'bukan baik' => -0.15,
+            'bukan suka' => -0.15, 'bukan senang' => -0.15, 'bukan puas' => -0.15, 'biasa' => -0.15,
+            'mediocre' => -0.15, 'average' => -0.15, 'standar' => -0.15, 'normal' => -0.15, 'so-so' => -0.15, 'meh' => -0.15,
+            
+            // Neutral words (valence near 0)
+            'netral' => 0.0, 'neutral' => 0.0, 'biasa' => 0.0, 'normal' => 0.0, 'standar' => 0.0,
+            'average' => 0.0, 'mediocre' => 0.0, 'tidak tahu' => 0.0, 'gak tahu' => 0.0,
+            'mungkin' => 0.0, 'perhaps' => 0.0, 'maybe' => 0.0, 'bisa jadi' => 0.0, 'kemungkinan' => 0.0,
+            'probable' => 0.0
         ];
         
-        $mediumKeywords = [
-            'positif' => ['bagus', 'baik', 'mantap', 'keren', 'suka', 'senang', 'puas', 'great', 'good', 'nice', 'wonderful', 'memuaskan', 'enjoy', 'fun', 'enak', 'nyaman', 'mudah', 'berhasil', 'sukses', 'aman', 'amanah'],
-            'negatif' => ['buruk', 'jelek', 'gagal', 'fail', 'error', 'salah', 'rusak', 'menyesal', 'kecewa', 'boring', 'ribet', 'sulit', 'mahal', 'lambat', 'ganggu', 'penipuan', 'fraud'],
-            'netral' => ['biasa', 'normal', 'standar', 'average', 'mediocre', 'ok', 'okay', 'fine', 'alright', 'so-so', 'meh']
-        ];
-        
-        $weakKeywords = [
-            'positif' => ['ok', 'okay', 'fine', 'alright', 'bisa', 'boleh', 'mungkin', 'lumayan', 'cukup', 'decent', 'acceptable'],
-            'negatif' => ['tidak bagus', 'tidak baik', 'gak bagus', 'ga bagus', 'nggak bagus', 'bukan bagus', 'biasa', 'mediocre', 'average'],
-            'netral' => ['tidak tahu', 'gak tahu', 'mungkin', 'perhaps', 'maybe', 'bisa jadi', 'kemungkinan']
-        ];
-        
-        // Count keyword matches by strength
-        $strongCount = 0;
-        $mediumCount = 0;
-        $weakCount = 0;
-        
-        if (isset($strongKeywords[$sentiment])) {
-            foreach ($strongKeywords[$sentiment] as $keyword) {
-                if (str_contains($text, $keyword)) {
-                    $strongCount++;
-                }
+        // Merge dengan learned keywords
+        if (isset($learnedKeywords['positive'])) {
+            foreach ($learnedKeywords['positive'] as $keyword) {
+                $vaderLexicon[$keyword] = 0.15;
             }
         }
         
-        if (isset($mediumKeywords[$sentiment])) {
-            foreach ($mediumKeywords[$sentiment] as $keyword) {
-                if (str_contains($text, $keyword)) {
-                    $mediumCount++;
-                }
+        if (isset($learnedKeywords['negative'])) {
+            foreach ($learnedKeywords['negative'] as $keyword) {
+                $vaderLexicon[$keyword] = -0.15;
             }
         }
         
-        if (isset($weakKeywords[$sentiment])) {
-            foreach ($weakKeywords[$sentiment] as $keyword) {
-                if (str_contains($text, $keyword)) {
-                    $weakCount++;
-                }
+        // VADER ORIGINAL: Single compound score calculation (sama dengan autoLabelSentiment)
+        $compoundScore = 0.0;
+        
+        // Calculate compound score dengan menjumlahkan semua valence
+        foreach ($vaderLexicon as $keyword => $valence) {
+            if (str_contains($text, $keyword)) {
+                $compoundScore += $valence;
             }
         }
         
-        // Factor 2: Text length and complexity
-        $textLength = mb_strlen($text);
-        $wordCount = count(preg_split('/\s+/', $text));
-        
-        // Factor 3: Intensifiers and negation
+        // Handle intensifiers (VADER rule: intensifier boosts valence)
         $intensifiers = ['sangat', 'banget', 'sekali', 'terlalu', 'benar-benar', 'really', 'very', 'so', 'extremely', 'highly'];
-        $negationWords = ['tidak', 'gak', 'ga', 'nggak', 'enggak', 'tdk', 'gk', 'tak', 'tk', 'bukan', 'bkn', 'no', 'not', 'never'];
-        
-        $hasIntensifier = false;
-        $hasNegation = false;
-        
-        foreach ($intensifiers as $int) {
-            if (str_contains($text, $int)) {
-                $hasIntensifier = true;
+        foreach ($intensifiers as $intensifier) {
+            if (str_contains($text, $intensifier)) {
+                $compoundScore *= 1.293; // VADER intensifier boost
                 break;
             }
         }
         
-        foreach ($negationWords as $neg) {
-            if (str_contains($text, $neg)) {
-                $hasNegation = true;
+        // Handle negation (VADER rule: negation flips valence)
+        $negationWords = ['tidak', 'gak', 'ga', 'nggak', 'enggak', 'tdk', 'gk', 'tak', 'tk', 'bukan', 'bkn', 'no', 'not', 'never', 'neither', 'nor'];
+        foreach ($negationWords as $negation) {
+            if (str_contains($text, $negation)) {
+                $compoundScore *= -0.74; // VADER negation factor
                 break;
             }
         }
         
-        // Calculate base confidence from keyword strength
-        $confidence += ($strongCount * 0.3) + ($mediumCount * 0.2) + ($weakCount * 0.1);
-        
-        // Adjust for text characteristics
-        if ($textLength > 50) {
-            $confidence += 0.1; // Longer text usually more confident
-        }
-        
-        if ($wordCount > 10) {
-            $confidence += 0.05; // More words usually more confident
-        }
-        
-        // Adjust for intensifiers
-        if ($hasIntensifier) {
-            $confidence += 0.15; // Intensifiers increase confidence
-        }
-        
-        // Adjust for negation (reduces confidence)
-        if ($hasNegation) {
-            $confidence -= 0.1; // Negation reduces confidence
-        }
-        
-        // Factor 4: Contradictory sentiment detection
-        $oppositeSentiment = $sentiment === 'positif' ? 'negatif' : ($sentiment === 'negatif' ? 'positif' : 'netral');
-        $oppositeCount = 0;
-        
-        if (isset($strongKeywords[$oppositeSentiment])) {
-            foreach ($strongKeywords[$oppositeSentiment] as $keyword) {
-                if (str_contains($text, $keyword)) {
-                    $oppositeCount++;
-                }
-            }
-        }
-        
-        if (isset($mediumKeywords[$oppositeSentiment])) {
-            foreach ($mediumKeywords[$oppositeSentiment] as $keyword) {
-                if (str_contains($text, $keyword)) {
-                    $oppositeCount++;
-                }
-            }
-        }
-        
-        // Reduce confidence if contradictory sentiment found
-        if ($oppositeCount > 0) {
-            $confidence -= ($oppositeCount * 0.1);
-        }
-        
-        // Factor 5: Emoji and punctuation analysis
-        $emojiCount = preg_match_all('/[\x{1F600}-\x{1F64F}]|[\x{1F300}-\x{1F5FF}]|[\x{1F680}-\x{1F6FF}]|[\x{1F1E0}-\x{1F1FF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]/u', $text);
-        $exclamationCount = substr_count($text, '!');
-        $questionCount = substr_count($text, '?');
-        
-        if ($emojiCount > 0) {
-            $confidence += 0.05; // Emojis add context
-        }
-        
-        if ($exclamationCount > 0) {
-            $confidence += 0.03; // Exclamations add emphasis
-        }
-        
-        // Normalize confidence to 0.1 - 0.95 range
-        $confidence = max(0.1, min(0.95, $confidence));
-        
-        return $confidence;
+        // VADER ORIGINAL: Return compound score langsung (bukan confidence)
+        // Compound score menunjukkan arah dan kekuatan sentimen
+        // > 0 = positif, < 0 = negatif, ~0 = netral
+        return $compoundScore;
     }
 
     private function getLearnedKeywords(Request $request): array
@@ -784,6 +760,149 @@ class LabellingController extends Controller
         }
 
         $this->saveLearnedKeywords($request, $learnedKeywords);
+    }
+
+    /**
+     * Calculate sentiment distribution from labeled data
+     * 
+     * @param array $labeledRows Array of labeled data
+     * @return array Sentiment distribution statistics
+     */
+    private function calculateSentimentDistribution(array $labeledRows): array
+    {
+        $distribution = [
+            'positif' => 0,
+            'negatif' => 0,
+            'netral' => 0,
+            'total' => count($labeledRows)
+        ];
+
+        foreach ($labeledRows as $row) {
+            $sentiment = $row['sentiment'] ?? 'netral';
+            if (isset($distribution[$sentiment])) {
+                $distribution[$sentiment]++;
+            }
+        }
+
+        // Calculate percentages
+        if ($distribution['total'] > 0) {
+            $distribution['positif_percentage'] = round(($distribution['positif'] / $distribution['total']) * 100, 1);
+            $distribution['negatif_percentage'] = round(($distribution['negatif'] / $distribution['total']) * 100, 1);
+            $distribution['netral_percentage'] = round(($distribution['netral'] / $distribution['total']) * 100, 1);
+        } else {
+            $distribution['positif_percentage'] = 0;
+            $distribution['negatif_percentage'] = 0;
+            $distribution['netral_percentage'] = 0;
+        }
+
+        return $distribution;
+    }
+
+    
+    /**
+     * Independent review data page
+     */
+    public function independentReview(Request $request)
+    {
+        $uploadedPath = $request->session()->get('review_csv_path');
+        $preview = $request->session()->get('review_preview');
+        $sentimentDistribution = $request->session()->get('review_sentiment_distribution', []);
+
+        return view('review', [
+            'uploadedPath' => $uploadedPath,
+            'preview' => $preview,
+            'sentimentDistribution' => $sentimentDistribution,
+        ]);
+    }
+
+    /**
+     * Upload file for independent review
+     */
+    public function uploadReview(Request $request)
+    {
+        $request->validate([
+            'csv_file' => ['required', 'file', 'mimes:csv,txt'],
+        ]);
+
+        $file = $request->file('csv_file');
+        $path = $file->storeAs('review', now()->format('Ymd_His') . '_' . $file->getClientOriginalName());
+
+        // Read CSV
+        $fullPath = Storage::path($path);
+        [$header, $rows] = $this->readCsv($fullPath, null);
+
+        // Validate CSV structure - must have sentiment column
+        $sentimentIndex = $this->findColumnIndex($header, ['sentiment', 'label']);
+        if ($sentimentIndex === null) {
+            return redirect()->route('review.index')->with('error', 'File CSV harus memiliki kolom "sentiment" atau "label".');
+        }
+
+        // Calculate sentiment distribution
+        $sentimentDistribution = $this->calculateSentimentDistributionFromRows($rows, $sentimentIndex);
+
+        // Store in session
+        $request->session()->put('review_csv_path', $path);
+        $request->session()->put('review_preview', ['header' => $header, 'rows' => array_slice($rows, 0, 100)]);
+        $request->session()->put('review_sentiment_distribution', $sentimentDistribution);
+        $request->session()->put('review_total_data', count($rows));
+
+        return redirect()->route('review.index')->with('status', 'File berhasil diupload. Siap direview!');
+    }
+
+    /**
+     * Find column index by name
+     */
+    private function findColumnIndex(array $header, array $possibleNames): ?int
+    {
+        foreach ($possibleNames as $name) {
+            $index = array_search(strtolower($name), array_map('strtolower', $header));
+            if ($index !== false) {
+                return (int) $index;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Calculate sentiment distribution from rows
+     */
+    private function calculateSentimentDistributionFromRows(array $rows, int $sentimentIndex): array
+    {
+        $distribution = [
+            'positif' => 0,
+            'negatif' => 0,
+            'netral' => 0,
+            'total' => count($rows)
+        ];
+
+        foreach ($rows as $row) {
+            $sentiment = isset($row[$sentimentIndex]) ? strtolower(trim((string) $row[$sentimentIndex])) : 'netral';
+            
+            // Normalize sentiment values
+            if ($sentiment === 'positive' || $sentiment === 'positif') {
+                $distribution['positif']++;
+            } elseif ($sentiment === 'negative' || $sentiment === 'negatif') {
+                $distribution['negatif']++;
+            } elseif ($sentiment === 'neutral' || $sentiment === 'netral') {
+                $distribution['netral']++;
+            } else {
+                // Default to netral for unknown values
+                $distribution['netral']++;
+            }
+        }
+
+        // Calculate percentages
+        if ($distribution['total'] > 0) {
+            $distribution['positif_percentage'] = round(($distribution['positif'] / $distribution['total']) * 100, 1);
+            $distribution['negatif_percentage'] = round(($distribution['negatif'] / $distribution['total']) * 100, 1);
+            $distribution['netral_percentage'] = round(($distribution['netral'] / $distribution['total']) * 100, 1);
+        } else {
+            $distribution['positif_percentage'] = 0;
+            $distribution['negatif_percentage'] = 0;
+            $distribution['netral_percentage'] = 0;
+        }
+
+        return $distribution;
     }
 }
 

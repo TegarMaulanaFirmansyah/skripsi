@@ -328,7 +328,7 @@ class ClassificationController extends Controller
     private function detectTextColumnIndex(array $header): ?int
     {
         if (empty($header)) return null;
-        $candidates = ['text', 'tweet', 'content', 'message', 'body', 'review', 'ulasan', 'preprocessed'];
+        $candidates = ['text', 'ulasan', 'content', 'message', 'body', 'review', 'preprocessed'];
         foreach ($header as $idx => $name) {
             $lower = strtolower(trim((string) $name));
             if (in_array($lower, $candidates, true)) {
@@ -378,6 +378,7 @@ class ClassificationController extends Controller
             'max_idf' => count($idf) > 0 ? max($idf) : 0,
             'sample_vocabulary' => array_slice($vocabulary, 0, 20),
             'sample_idf_values' => array_slice($idf, 0, 20, true),
+            'sample_tf_values' => $this->getSampleTFValues($trainingData, $vocabulary),
             'vector_dimensions' => count($trainingVectors[0]) ?? 0,
             'total_training_vectors' => count($trainingVectors)
         ];
@@ -462,6 +463,44 @@ class ClassificationController extends Controller
             $idf[$idx] = log(($totalDocs + 1) / ($df + 1)) + 1.0;
         }
         return $idf;
+    }
+
+    private function getSampleTFValues(array $trainingData, array $vocabulary): array
+    {
+        $sampleTF = [];
+        $vocabularyMap = array_flip($vocabulary);
+        $sampleCount = min(10, count($trainingData)); // Sample 10 documents
+        
+        for ($i = 0; $i < $sampleCount; $i++) {
+            $data = $trainingData[$i];
+            $words = explode(' ', $data['text']);
+            $wordCount = count($words);
+            
+            // Calculate TF for each word in vocabulary
+            foreach ($vocabulary as $index => $word) {
+                $tf = 0;
+                foreach ($words as $w) {
+                    if ($w === $word) {
+                        $tf++;
+                    }
+                }
+                
+                if ($tf > 0 && count($sampleTF) < 20) { // Limit to 20 samples
+                    $sampleTF[] = [
+                        'term' => $word,
+                        'tf' => $tf / $wordCount, // Normalized TF
+                        'doc_index' => $i + 1
+                    ];
+                    break;
+                }
+            }
+            
+            if (count($sampleTF) >= 20) {
+                break;
+            }
+        }
+        
+        return $sampleTF;
     }
 
     private function vectorizeDataTFIDF(array $data, array $vocabulary, array $idf): array

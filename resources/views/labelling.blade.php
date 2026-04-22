@@ -50,6 +50,7 @@
         .label-form { display:inline-flex; gap:4px; align-items:center; }
         .label-select { padding:2px 6px; border:1px solid #cbd5e0; border-radius:4px; font-size:11px; }
         .label-btn { padding:2px 6px; font-size:10px; }
+        
         @media (min-width:1024px){ .container{ gap:32px } }
     </style>
 </head>
@@ -59,8 +60,9 @@
             <p class="brand">Menu</p>
             <ul class="nav">
                 <li><a href="{{ url('/') }}">Dashboard</a></li>
-                <li><a href="{{ url('/preprocessing') }}">Preprocessing</a></li>
                 <li><a href="{{ url('/labelling') }}" class="active">Labelling</a></li>
+                <li><a href="{{ url('/review') }}">Review Data</a></li>
+                <li><a href="{{ url('/preprocessing') }}">Preprocessing</a></li>
                 <li><a href="{{ url('/klasifikasi') }}">Klasifikasi</a></li>
             </ul>
         </aside>
@@ -146,18 +148,24 @@
             @if (!empty($labeled))
                 <div id="section-result" style="display:none;">
                     <h3 style="margin:20px 0 8px; font-size:16px;">Hasil Labelling</h3>
+                    <div class="pill" style="margin-bottom:12px;background:#e6f3ff;border-color:#b3d9ff;color:#0066cc;">
+                        <strong> Cara Membaca Compoud Score:</strong> VADER compound score menunjukkan arah sentimen. <strong>> 0</strong> = positif (semakin besar = semakin positif), <strong>&lt; 0</strong> = negatif (semakin kecil = semakin negatif), <strong>~ 0</strong> = netral. Threshold klasifikasi: positif jika &ge; 0.05, negatif jika &le; -0.05, netral jika -0.05 &lt; score &lt; 0.05.
+                    </div>
                     @if (isset($labeled['total_count']) && $labeled['total_count'] > count($labeled['rows']))
                         <div class="pill" style="margin-bottom:12px;background:#fff3cd;border-color:#ffeaa7;color:#856404;">
-                            Menampilkan 100 data pertama dari total {{ $labeled['total_count'] }} data. 
-                            Download untuk melihat semua hasil.
+                            <strong>Download & Review:</strong> Download data hasil labeling lalu upload ke <a href="{{ route('review.index') }}" style="color:#856404;text-decoration:underline;font-weight:600;">Review Data</a> untuk melihat sebaran sentiment dan analisis lengkap.
                         </div>
                     @endif
                     
                     @if (!empty($learnedKeywords) && (count($learnedKeywords['positive'] ?? []) > 0 || count($learnedKeywords['negative'] ?? []) > 0 || count($learnedKeywords['neutral'] ?? []) > 0))
                         <div class="pill" style="margin-bottom:12px;background:#e6f3ff;border-color:#b3d9ff;color:#0066cc;">
-                            <strong>🧠 AI Learning:</strong> Sistem telah mempelajari {{ count($learnedKeywords['positive'] ?? []) + count($learnedKeywords['negative'] ?? []) + count($learnedKeywords['neutral'] ?? []) }} keyword baru dari koreksi manual Anda.
+                            <strong> AI Learning:</strong> Sistem telah mempelajari {{ count($learnedKeywords['positive'] ?? []) + count($learnedKeywords['negative'] ?? []) + count($learnedKeywords['neutral'] ?? []) }} keyword baru dari koreksi manual Anda.
                         </div>
                     @endif
+                    
+                    <div class="pill" style="margin-bottom:12px;background:#fff3cd;border-color:#ffeaa7;color:#856404;">
+                        <strong> Lihat Statistik Lengkap:</strong> <a href="{{ route('review.index') }}" style="color:#856404;text-decoration:underline;font-weight:600;">Review Data</a> untuk melihat sebaran sentiment dan analisis lengkap.
+                    </div>
                     <div style="overflow:auto;">
                         <table>
                         <thead>
@@ -165,7 +173,7 @@
                                 <th style="width:5%;">No</th>
                                 <th style="width:40%;">Ulasan Asli</th>
                                 <th style="width:15%;">Sentimen</th>
-                                <th style="width:15%;">Confidence</th>
+                                <th style="width:15%;">Compoud Score</th>
                                 <th style="width:25%;">Aksi</th>
                             </tr>
                         </thead>
@@ -181,9 +189,9 @@
                                     </td>
                                     <td style="text-align:center;">
                                         <div class="confidence-bar">
-                                            <div class="confidence-fill" style="width: {{ $r['confidence'] * 100 }}%"></div>
+                                            <div class="confidence-fill" style="width: {{ min(100, max(0, ($r['confidence'] + 1) * 50)) }}%; background: {{ $r['confidence'] > 0 ? '#38a169' : ($r['confidence'] < 0 ? '#e53e3e' : '#718096') }};"></div>
                                         </div>
-                                        <small style="color:#4a5568;">{{ number_format($r['confidence'] * 100, 1) }}%</small>
+                                        <small style="color:#4a5568;">{{ number_format($r['confidence'], 3) }}</small>
                                     </td>
                                     <td>
                                         <select class="label-select" data-row="{{ $i }}" onchange="updateLabel({{ $i }}, this.value)">
