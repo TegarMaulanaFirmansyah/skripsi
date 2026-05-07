@@ -173,7 +173,7 @@
                                 <th style="width:5%;">No</th>
                                 <th style="width:40%;">Ulasan Asli</th>
                                 <th style="width:15%;">Sentimen</th>
-                                <th style="width:15%;">Compoud Score</th>
+                                <th style="width:15%;">Compound Score</th>
                                 <th style="width:25%;">Aksi</th>
                             </tr>
                         </thead>

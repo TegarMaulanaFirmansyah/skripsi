@@ -599,8 +599,11 @@ class LabellingController extends Controller
                 break;
             }
         }
-        
-        // VADER ORIGINAL: Standard threshold logic
+                // VADER ORIGINAL: Normalize compound score dengan sigmoid formula
+        // compound = sum_valence / sqrt(sum_valence^2 + alpha), alpha = 15
+        $alpha = 15.0;
+        $compoundScore = $compoundScore / sqrt(($compoundScore * $compoundScore) + $alpha);
+                // VADER ORIGINAL: Standard threshold logic
         if ($compoundScore >= 0.05) {
             return 'positif';
         } elseif ($compoundScore <= -0.05) {
@@ -664,8 +667,7 @@ class LabellingController extends Controller
             // Neutral words (valence near 0)
             'netral' => 0.0, 'neutral' => 0.0, 'biasa' => 0.0, 'normal' => 0.0, 'standar' => 0.0,
             'average' => 0.0, 'mediocre' => 0.0, 'tidak tahu' => 0.0, 'gak tahu' => 0.0,
-            'mungkin' => 0.0, 'perhaps' => 0.0, 'maybe' => 0.0, 'bisa jadi' => 0.0, 'kemungkinan' => 0.0,
-            'probable' => 0.0
+            'bisa jadi' => 0.0, 'kemungkinan' => 0.0, 'probable' => 0.0
         ];
         
         // Merge dengan learned keywords
@@ -708,6 +710,11 @@ class LabellingController extends Controller
                 break;
             }
         }
+        
+        // VADER ORIGINAL: Normalize compound score dengan sigmoid formula
+        // compound = sum_valence / sqrt(sum_valence^2 + alpha), alpha = 15
+        $alpha = 15.0;
+        $compoundScore = $compoundScore / sqrt(($compoundScore * $compoundScore) + $alpha);
         
         // VADER ORIGINAL: Return compound score langsung (bukan confidence)
         // Compound score menunjukkan arah dan kekuatan sentimen

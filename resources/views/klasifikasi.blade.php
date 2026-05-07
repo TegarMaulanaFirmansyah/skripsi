@@ -333,7 +333,7 @@
                         @endif
 
                         <!-- TF Information -->
-                        @if(isset($results['tfidf_info']['sample_tf_values']))
+                        @if(!empty($results['tfidf_info']['sample_tf_values']))
                         <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
                             <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">Sample Term Frequency (TF) Values:</h5>
                             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:6px; font-size:11px;">
@@ -345,6 +345,11 @@
                                 @endforeach
                             </div>
                         </div>
+                        @elseif(isset($results['tfidf_info']))
+                        <div style="background:white; padding:12px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+                            <h5 style="margin:0 0 8px; font-size:12px; color:#475569;">Sample Term Frequency (TF) Values:</h5>
+                            <p style="margin:0; font-size:12px; color:#475569;">TF values belum tersedia untuk dokumen sampel. Pastikan data training sudah terupload dengan teks yang valid.</p>
+                        </div>
                         @endif
 
                         <!-- SVM Process Explanation -->
@@ -354,23 +359,35 @@
                                 <p style="margin:0 0 8px;"><strong>1. Feature Extraction (TF-IDF):</strong></p>
                                 <ul style="margin:0 0 8px 16px; padding:0;">
                                     <li><strong>TF (Term Frequency):</strong> Menghitung seberapa sering kata muncul dalam dokumen. Formula: TF = (jumlah kata dalam dokumen) / (total kata dalam dokumen)</li>
-                                    <li><strong>IDF (Inverse Document Frequency):</strong> Menghitung kepentingan kata. Kata yang jarang muncul di banyak dokumen memiliki nilai IDF tinggi. Formula: IDF = log(total dokumen / jumlah dokumen yang mengandung kata)</li>
+                                    <li><strong>IDF (Inverse Document Frequency):</strong> Menghitung kepentingan kata. Kata yang jarang muncul di banyak dokumen memiliki nilai IDF tinggi. Formula yang dipakai di kode: IDF = log((total dokumen + 1) / (jumlah dokumen yang mengandung kata + 1)) + 1</li>
                                     <li><strong>TF-IDF:</strong> Kombinasi TF dan IDF untuk memberikan bobot pada kata. Kata yang sering muncul dalam dokumen tapi jarang di corpus lain akan memiliki TF-IDF tinggi.</li>
                                 </ul>
+                                @if(isset($results['tfidf_info']['label_distribution']))
+                                    <p style="margin:0 0 8px;"><strong>Distribusi label training:</strong></p>
+                                    <ul style="margin:0 0 8px 16px; padding:0;">
+                                        @foreach($results['tfidf_info']['label_distribution'] as $label => $count)
+                                            <li>{{ ucfirst($label) }}: {{ $count }} sampel</li>
+                                        @endforeach
+                                    </ul>
+                                @endif
+                                @if(isset($results['tfidf_info']['error']))
+                                    <p style="margin:0; color:#b91c1c;"><strong>TF-IDF Error:</strong> {{ $results['tfidf_info']['error'] }}</p>
+                                @endif
+                            </div>
                                 
                                 <p style="margin:12px 0 8px;"><strong>2. SVM Training (One-vs-Rest):</strong></p>
                                 <ul style="margin:0 0 8px 16px; padding:0;">
                                     <li><strong>Multi-class Classification:</strong> Untuk 3 kelas (positif, negatif, netral), SVM membangun 3 classifier binary</li>
                                     <li><strong>Hyperplane:</strong> Mencari hyperplane optimal yang memisahkan data antar kelas dengan margin maksimum</li>
                                     <li><strong>Support Vectors:</strong> Data points yang terdekat dengan hyperplane dan menentukan posisi hyperplane</li>
-                                    <li><strong>Kernel RBF:</strong> Menggunakan Radial Basis Function untuk memetakan data ke dimensi lebih tinggi, memungkinkan klasifikasi non-linear</li>
+                                    <li><strong>Linear Kernel:</strong> Kode menggunakan SVM linear pada implementasi saat ini</li>
                                 </ul>
                                 
                                 <p style="margin:12px 0 8px;"><strong>3. Prediction:</strong></p>
                                 <ul style="margin:0 0 8px 16px; padding:0;">
                                     <li><strong>Vector Transform:</strong> Data testing diubah ke vector TF-IDF yang sama dengan training data</li>
-                                    <li><strong>Distance Calculation:</strong> Menghitung jarak ke hyperplane setiap kelas</li>
-                                    <li><strong>Confidence Score:</strong> Berdasarkan jarak ke hyperplane, semakin dekat semakin tinggi confidence</li>
+                                    <li><strong>Prediction Score:</strong> Model menghasilkan probabilitas untuk masing-masing kelas</li>
+                                    <li><strong>Confidence Score:</strong> Nilai confidence diambil dari probabilitas model, bukan langsung dari jarak hyperplane</li>
                                     <li><strong>Final Decision:</strong> Kelas dengan confidence tertinggi dipilih sebagai prediksi</li>
                                 </ul>
                             </div>

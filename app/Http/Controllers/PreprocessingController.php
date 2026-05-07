@@ -687,12 +687,24 @@ class PreprocessingController extends Controller
             ];
         }
 
+        // WRANGLING: Remove empty and duplicate rows based on stemming column
+        $originalCount = count($processedRows);
+        $processedRows = $this->removeEmptyRows($processedRows, 'stemming');
+        $processedRows = $this->removeDuplicateRows($processedRows, 'stemming');
+        $removedCount = $originalCount - count($processedRows);
+
+        // Store processed data with wrangling info
         $request->session()->put('pre_processed', [
             'header' => $header,
             'rows' => $processedRows,
         ]);
 
-        return redirect()->route('preprocessing.index')->with('status', 'Preprocessing data berlabel selesai. Label dipertahankan tanpa confidence.');
+        $statusMessage = 'Preprocessing data berlabel selesai. Label dipertahankan tanpa confidence.';
+        if ($removedCount > 0) {
+            $statusMessage .= " ({$removedCount} data dihapus saat wrangling)";
+        }
+
+        return redirect()->route('preprocessing.index')->with('status', $statusMessage);
     }
 
     /**
@@ -762,12 +774,24 @@ class PreprocessingController extends Controller
             ];
         }
 
+        // WRANGLING: Remove empty and duplicate rows based on stemming column
+        $originalCount = count($processedRows);
+        $processedRows = $this->removeEmptyRows($processedRows, 'stemming');
+        $processedRows = $this->removeDuplicateRows($processedRows, 'stemming');
+        $removedCount = $originalCount - count($processedRows);
+
+        // Store processed data with wrangling info
         $request->session()->put('pre_processed', [
             'header' => $header,
             'rows' => $processedRows,
         ]);
 
-        return redirect()->route('preprocessing.index')->with('status', 'Preprocessing selesai.');
+        $statusMessage = 'Preprocessing selesai.';
+        if ($removedCount > 0) {
+            $statusMessage = "Preprocessing selesai. ({$removedCount} data dihapus saat wrangling)";
+        }
+
+        return redirect()->route('preprocessing.index')->with('status', $statusMessage);
     }
 
     /**
@@ -791,6 +815,45 @@ class PreprocessingController extends Controller
         }
         
         return null;
+    }
+
+    /**
+     * Menghapus baris yang memiliki data kosong pada kolom tertentu
+     * 
+     * @param array $rows Array dari baris data
+     * @param string $columnKey Key dari kolom yang akan dicek
+     * @return array Array baris yang sudah dihapus baris kosongnya
+     */
+    private function removeEmptyRows(array $rows, string $columnKey): array
+    {
+        return array_filter($rows, function ($row) use ($columnKey) {
+            $value = isset($row[$columnKey]) ? trim((string) $row[$columnKey]) : '';
+            return $value !== '';
+        });
+    }
+
+    /**
+     * Menghapus baris duplikat berdasarkan kolom tertentu
+     * Hanya sisakan 1 data, yang lainnya dihapus
+     * 
+     * @param array $rows Array dari baris data
+     * @param string $columnKey Key dari kolom yang akan dijadikan basis duplikasi
+     * @return array Array baris yang sudah dihapus duplikatnya
+     */
+    private function removeDuplicateRows(array $rows, string $columnKey): array
+    {
+        $seen = [];
+        return array_filter($rows, function ($row) use (&$seen, $columnKey) {
+            $value = isset($row[$columnKey]) ? trim((string) $row[$columnKey]) : '';
+            $key = strtolower($value);
+            
+            if (isset($seen[$key])) {
+                return false; // Duplikat, hapus
+            }
+            
+            $seen[$key] = true;
+            return true; // Pertama kali, simpan
+        });
     }
 }
 

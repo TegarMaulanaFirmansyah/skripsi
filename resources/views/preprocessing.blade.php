@@ -143,7 +143,7 @@
                         <thead>
                             <tr>
                                 <th style="width:5%;">No</th>
-                                <th style="width:20%;">Tweet Asli</th>
+                                <th style="width:20%;">Ulasan Asli</th>
                                 <th style="width:15%;">Case Folding</th>
                                 <th style="width:15%;">Cleansing</th>
                                 <th style="width:15%;">Normalisasi</th>
